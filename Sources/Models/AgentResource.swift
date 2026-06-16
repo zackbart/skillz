@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// The kinds of resource Skillz can manage. MCP is reserved (D3) — discovery
-/// is not implemented yet, but the model + UI leave the door open.
+/// The kinds of resource Skillz can manage: agent skills (directories) and MCP
+/// servers (entries inside shared config files). See DECISIONS D3.
 enum ResourceKind: String, Hashable, CaseIterable {
     case skill
     case mcp
@@ -64,16 +64,16 @@ enum GitStatus: String, Hashable {
     }
 }
 
-/// The minimal shape every managed resource shares — `Skill` now, a future
-/// `McpServer` later. Deliberately small: filesystem-only concepts (canonical
-/// path, git status, provenance, CLI-managed) stay on `Skill`, since MCP servers
-/// are config-file entries, not directories (DECISIONS.md D3).
+/// The minimal shape every managed resource shares — `Skill` and `McpServer`.
+/// Deliberately just identity: anything axis-specific stays on the concrete type.
+/// Skills wire into the `Agent` axis (`wiredAgents`/`declaredAgents`, filesystem
+/// concepts); MCP servers live in the distinct `McpHarness` axis (present/enabled
+/// per harness). Forcing either set of words onto the other would lie about the
+/// model, so the protocol carries neither.
 protocol AgentResource: Identifiable, Hashable {
     var id: String { get }
     var name: String { get }
     var summary: String? { get }
     var scope: ResourceScope { get }
     var kind: ResourceKind { get }
-    var wiredAgents: Set<Agent> { get }
-    var declaredAgents: Set<Agent> { get }
 }

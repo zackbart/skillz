@@ -20,6 +20,12 @@ enum ActionID: Equatable {
     case wire(Skill.ID, Agent)
     case update(Skill.ID)
     case remove(Skill.ID)
+    // MCP mutations
+    case mcpAdd
+    case mcpEdit(McpServer.ID)
+    case mcpRemove(McpServer.ID)
+    case mcpApply(McpServer.ID)
+    case mcpToggle(McpServer.ID, McpHarness)
 }
 
 /// Status of an in-flight mutation — drives spinners, inline confirmations and the alert.
@@ -64,12 +70,13 @@ enum SidebarFilter: Hashable {
     case library(LibraryFilter)
     case agent(Agent)
     case source(String)
+    case mcpHarness(McpHarness)
 }
 
 @MainActor
 final class AppState: ObservableObject {
     // Navigation / filters
-    @Published var kind: ResourceKind = .skill
+    @Published var kind: ResourceKind = .skill { didSet { if oldValue != kind { switchedKind() } } }
     @Published var scopeMode: ScopeMode = .global { didSet { persistScope() } }
     @Published var selectedProject: URL?
     /// Projects the user has saved — persisted indefinitely, switchable, removable.
@@ -78,9 +85,13 @@ final class AppState: ObservableObject {
     // selection on change so the detail pane never shows a filtered-out skill.
     @Published var sidebarFilter: SidebarFilter = .library(.all) { didSet { reconcileSelection() } }
 
-    // Data
+    // Data — skills
     @Published var skills: [Skill] = []
     @Published var selection: Skill.ID?
+    // Data — MCP servers (a parallel axis, kept honest rather than forced through skill state)
+    @Published var mcpServers: [McpServer] = []
+    @Published var mcpSelection: McpServer.ID?
+    @Published var mcpIssues: [McpConfigIssue] = []
     @Published var searchText = "" { didSet { reconcileSelection() } }
     @Published var isLoading = false
     @Published var cliAvailable = false
@@ -90,6 +101,7 @@ final class AppState: ObservableObject {
     @Published var actionStatus: ActionStatus = .idle   // drives spinners / inline confirmations
     @Published var lastError: String?                   // alert binding (non-nil ⇒ show alert)
     @Published var pendingSelectName: String?           // name to select once it appears post-reload
+    @Published var pendingMcpSelectName: String?         // MCP equivalent (re-select after a write)
 
     private var watcher: FileWatcher?
     private let projectsKey = "recentProjects" // key kept for continuity with existing data
@@ -102,6 +114,9 @@ final class AppState: ObservableObject {
     private var scanCache: [ResourceScope: [Skill]] = [:]
     /// Which scope `skills` currently reflects — drives the seed-on-switch path.
     private var skillsScope: ResourceScope?
+    /// MCP equivalents of the above (same seed-on-switch / generation-guard discipline).
+    private var mcpScanCache: [ResourceScope: McpScanResult] = [:]
+    private var mcpScope: ResourceScope?
     /// Skill dirs the latest scan looked at; what the FileWatcher should watch. Captured
     /// from the scan (incl. nested ancestor/descendant bases) so nested edits fire reloads.
     private var watchPaths: [String] = []
@@ -130,6 +145,13 @@ final class AppState: ObservableObject {
 
     var driftCount: Int { skills.filter { !$0.driftMissing.isEmpty }.count }
     var divergedCount: Int { skills.filter { $0.diverged }.count }
+
+    // MCP-side counts (mirror the skill counts; used by the kind-aware sidebar).
+    var mcpDivergedCount: Int { mcpServers.filter { $0.definitionDiverges }.count }
+    var mcpDriftCount: Int { mcpServers.filter { !$0.supportedButMissing.isEmpty }.count }
+    func mcpCount(for harness: McpHarness) -> Int {
+        mcpServers.filter { $0.presentIn.contains(harness) }.count
+    }
 
     /// Badge count — must use the SAME predicate as `filteredSkills`' agent clause
     /// (available OR declared) so the sidebar number matches the produced list.
@@ -166,6 +188,7 @@ final class AppState: ObservableObject {
             list = list.filter { $0.availableAgents.contains(agent) || $0.declaredAgents.contains(agent) }
         case .source(let src):
             list = list.filter { $0.sourceGroups.contains(src) }
+        case .mcpHarness: break // MCP-only filter; ignored in skill mode
         }
         if !searchText.isEmpty {
             let q = searchText.lowercased()
@@ -184,22 +207,60 @@ final class AppState: ObservableObject {
         return filteredSkills.first { $0.id == selection }
     }
 
+    var filteredMcpServers: [McpServer] {
+        var list = mcpServers
+        switch sidebarFilter {
+        case .library(.all): break
+        case .library(.diverged): list = list.filter { $0.definitionDiverges }
+        case .library(.drift): list = list.filter { !$0.supportedButMissing.isEmpty }
+        case .mcpHarness(let h): list = list.filter { $0.presentIn.contains(h) }
+        case .agent, .source: break // skill-only filters; ignored in MCP mode
+        }
+        if !searchText.isEmpty {
+            let q = searchText.lowercased()
+            list = list.filter {
+                $0.name.lowercased().contains(q) || ($0.summary?.lowercased().contains(q) ?? false)
+            }
+        }
+        return list
+    }
+
+    var selectedMcpServer: McpServer? {
+        guard let mcpSelection else { return nil }
+        return filteredMcpServers.first { $0.id == mcpSelection }
+    }
+
     // MARK: - Selection / filter coherence
 
     /// Clear the selection if it's no longer in the visible list (called from filter didSets).
+    /// Reconciles whichever axis is active so the detail pane never shows a filtered-out row.
     func reconcileSelection() {
-        if let sel = selection, !filteredSkills.contains(where: { $0.id == sel }) {
-            selection = nil
+        if kind == .skill {
+            if let sel = selection, !filteredSkills.contains(where: { $0.id == sel }) {
+                selection = nil
+            }
+        } else {
+            if let sel = mcpSelection, !filteredMcpServers.contains(where: { $0.id == sel }) {
+                mcpSelection = nil
+            }
         }
     }
 
-    /// Reset all filters + selection. Called on scope/project change so carried-over
-    /// agent/source/lib/search state can't silently empty the list. Selection is set last
+    /// Reset all filters + selection. Called on scope/project/kind change so carried-over
+    /// agent/source/lib/search state can't silently empty the list. Selections are set last
     /// so the net result is always `selection == nil` regardless of didSet ordering.
     func resetFilters() {
         sidebarFilter = .library(.all)
         searchText = ""
         selection = nil
+        mcpSelection = nil
+    }
+
+    /// Switching the kind switcher resets filters and loads the new axis. A `.source` filter
+    /// (skill-only) can't survive into MCP mode, and `resetFilters` already clears it.
+    private func switchedKind() {
+        resetFilters()
+        reload()
     }
 
     // MARK: - Project selection
@@ -287,6 +348,10 @@ final class AppState: ObservableObject {
     // MARK: - Loading
 
     func reload() {
+        kind == .skill ? reloadSkills() : reloadMcp()
+    }
+
+    private func reloadSkills() {
         let key = currentScope
         // On a scope/project SWITCH, paint the target scope's last-known list immediately
         // (instant feel), or clear the previous scope's list so a stale wrong-project list
@@ -336,6 +401,51 @@ final class AppState: ObservableObject {
                 if case .source(let src) = self.sidebarFilter,
                    !self.sources.contains(where: { $0.name == src }) {
                     self.sidebarFilter = .library(.all)
+                }
+                self.reconcileSelection()
+                self.updateWatcher()
+            }
+        }
+    }
+
+    private func reloadMcp() {
+        let key = currentScope
+        if mcpScope != key {
+            let cached = mcpScanCache[key]
+            mcpServers = cached?.servers ?? []
+            mcpIssues = cached?.issues ?? []
+            mcpScope = key
+            reconcileSelection()
+        }
+        isLoading = true
+        reloadGeneration &+= 1
+        let gen = reloadGeneration
+        let mode = scopeMode
+        let project = selectedProject
+        Task.detached(priority: .userInitiated) {
+            let result: McpScanResult
+            switch mode {
+            case .global: result = McpScanner.scanGlobal()
+            case .project: result = project.map { McpScanner.scanProject(root: $0) } ?? .empty
+            }
+            let watch = McpScanner.configWatchPaths(
+                global: mode == .global, root: mode == .project ? project : nil)
+            let git = GitStatusService.isAvailable
+            await MainActor.run {
+                guard gen == self.reloadGeneration else { return }
+                self.mcpServers = result.servers
+                self.mcpIssues = result.issues
+                self.mcpScanCache[key] = result
+                self.mcpScope = key
+                self.watchPaths = watch
+                self.gitAvailable = git
+                self.isLoading = false
+                if let nm = self.pendingMcpSelectName {
+                    self.mcpSelection = result.servers.first { $0.name == nm }?.id
+                    self.pendingMcpSelectName = nil
+                }
+                if let sel = self.mcpSelection, !result.servers.contains(where: { $0.id == sel }) {
+                    self.mcpSelection = nil
                 }
                 self.reconcileSelection()
                 self.updateWatcher()
@@ -501,6 +611,107 @@ final class AppState: ObservableObject {
         while i < b.count, i < t.count, b[i] == t[i] { i += 1 }
         let up = Array(repeating: "..", count: b.count - i)
         return (up + t[i...]).joined(separator: "/")
+    }
+
+    // MARK: - MCP mutations
+
+    /// Add a new server into the chosen harnesses' configs at the current scope (root base).
+    func addMcpServer(name: String, def: PortableMcpDefinition, targets: [McpHarness]) {
+        let scope = currentScope
+        let jobs: [(McpWriteEngine.Op, McpConfigLocation)] = targets.compactMap { h in
+            guard let loc = mcpLocation(h, scope: scope, logicalLocation: "") else { return nil }
+            return (.upsert(name: name, def: def, enabled: true), loc)
+        }
+        runMcpWrites(.mcpAdd, "Adding \(name)", jobs, selectName: name)
+    }
+
+    /// Re-apply an edited definition into every harness the server already lives in,
+    /// preserving each harness's current enabled state (and its agent-local fields).
+    func editMcpServer(_ server: McpServer, def: PortableMcpDefinition) {
+        var jobs: [(McpWriteEngine.Op, McpConfigLocation)] = []
+        for h in server.presentIn {
+            guard let loc = server.origins[h]?.first(where: { $0.isPrimary }) ?? server.origins[h]?.first
+            else { continue }
+            let enabled = server.entries[h]?.enabled ?? true
+            jobs.append((.upsert(name: server.name, def: def, enabled: enabled), loc))
+        }
+        runMcpWrites(.mcpEdit(server.id), "Saving \(server.name)", jobs, selectName: server.name)
+    }
+
+    /// Copy the server into every harness that supports its transport but doesn't have it.
+    func applyToSupported(_ server: McpServer) {
+        guard let def = server.representativePortable else { return }
+        let jobs: [(McpWriteEngine.Op, McpConfigLocation)] = server.supportedButMissing.compactMap { h in
+            guard let loc = mcpLocation(h, scope: server.scope, logicalLocation: server.logicalLocation)
+            else { return nil }
+            return (.upsert(name: server.name, def: def, enabled: true), loc)
+        }
+        runMcpWrites(.mcpApply(server.id), "Applying \(server.name)", jobs, selectName: server.name)
+    }
+
+    /// Remove the server from the given harnesses (all of their origin files), or from every
+    /// harness it lives in when `harnesses` is empty.
+    func removeMcpServer(_ server: McpServer, from harnesses: [McpHarness] = []) {
+        let targets = harnesses.isEmpty ? Array(server.presentIn) : harnesses
+        var jobs: [(McpWriteEngine.Op, McpConfigLocation)] = []
+        for h in targets {
+            for loc in server.origins[h] ?? [] { jobs.append((.remove(name: server.name), loc)) }
+        }
+        let keepsSome = !Set(targets).isSuperset(of: server.presentIn)
+        runMcpWrites(.mcpRemove(server.id), "Removing \(server.name)", jobs,
+                     selectName: keepsSome ? server.name : nil)
+    }
+
+    /// Enable / disable the server in a single harness (only opencode & Codex can express this).
+    func setMcpEnabled(_ server: McpServer, harness: McpHarness, enabled: Bool) {
+        guard let def = server.entries[harness]?.portable,
+              let loc = server.origins[harness]?.first(where: { $0.isPrimary }) ?? server.origins[harness]?.first
+        else { return }
+        runMcpWrites(.mcpToggle(server.id, harness), enabled ? "Enabling" : "Disabling",
+                     [(.upsert(name: server.name, def: def, enabled: enabled), loc)],
+                     selectName: server.name)
+    }
+
+    /// Resolve the primary config location for a harness at a scope + project subpackage.
+    private func mcpLocation(_ h: McpHarness, scope: ResourceScope, logicalLocation: String) -> McpConfigLocation? {
+        switch scope {
+        case .global:
+            return McpConfigDescriptor.globalLocations(h).first
+        case .project(let root):
+            var base = URL(fileURLWithPath: root)
+            if !logicalLocation.isEmpty && !logicalLocation.hasPrefix("↑") {
+                base = base.appendingPathComponent(logicalLocation)
+            }
+            return McpConfigDescriptor.projectLocations(h, base: base).first
+        }
+    }
+
+    /// Run a batch of config writes off the main actor, aggregating failures, then reload.
+    /// Mirrors `perform` but for the MCP write engine (FileManager writes, not the CLI).
+    private func runMcpWrites(_ id: ActionID, _ label: String,
+                              _ jobs: [(McpWriteEngine.Op, McpConfigLocation)],
+                              selectName: String?) {
+        guard !jobs.isEmpty else { return }
+        actionStatus = .running(id, label)
+        lastError = nil
+        Task.detached(priority: .userInitiated) {
+            var failures: [String] = []
+            for (op, loc) in jobs {
+                do { _ = try McpWriteEngine.apply(op, at: loc) }
+                catch { failures.append("\(loc.harness.displayName): \(error)") }
+            }
+            await MainActor.run {
+                if failures.isEmpty {
+                    self.actionStatus = .success(id, label)
+                    if let nm = selectName { self.pendingMcpSelectName = nm }
+                } else {
+                    let msg = failures.joined(separator: "\n")
+                    self.actionStatus = .failure(id, msg)
+                    self.lastError = msg
+                }
+                self.reload()
+            }
+        }
     }
 
     func openInEditor(_ skill: Skill) {

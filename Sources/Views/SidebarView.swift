@@ -54,27 +54,44 @@ struct SidebarView: View {
                 .selectionDisabled()
             }
 
-            Section("Library") {
-                row(.library(.all), "All", systemImage: "square.stack", count: state.skills.count)
-                row(.library(.drift), "Drift", systemImage: "exclamationmark.triangle",
-                    count: state.driftCount, iconTint: state.driftCount > 0 ? Theme.drift : nil)
-                row(.library(.diverged), "Diverged", systemImage: "arrow.triangle.branch",
-                    count: state.divergedCount)
-            }
-
-            Section("Agents") {
-                ForEach(Agent.sidebarAgents) { agent in
-                    row(.agent(agent), agent.displayName, dot: agent.color, count: state.count(for: agent))
+            if state.kind == .skill {
+                Section("Library") {
+                    row(.library(.all), "All", systemImage: "square.stack", count: state.skills.count)
+                    row(.library(.drift), "Drift", systemImage: "exclamationmark.triangle",
+                        count: state.driftCount, iconTint: state.driftCount > 0 ? Theme.drift : nil)
+                    row(.library(.diverged), "Diverged", systemImage: "arrow.triangle.branch",
+                        count: state.divergedCount)
                 }
-            }
 
-            if !state.sources.isEmpty {
-                Section("Sources") {
-                    ForEach(state.sources, id: \.name) { src in
-                        let isLocal = src.name.hasPrefix("Local")
-                        row(.source(src.name), src.name,
-                            systemImage: isLocal ? "folder" : "shippingbox",
-                            count: src.count, truncate: true)
+                Section("Agents") {
+                    ForEach(Agent.sidebarAgents) { agent in
+                        row(.agent(agent), agent.displayName, dot: agent.color, count: state.count(for: agent))
+                    }
+                }
+
+                if !state.sources.isEmpty {
+                    Section("Sources") {
+                        ForEach(state.sources, id: \.name) { src in
+                            let isLocal = src.name.hasPrefix("Local")
+                            row(.source(src.name), src.name,
+                                systemImage: isLocal ? "folder" : "shippingbox",
+                                count: src.count, truncate: true)
+                        }
+                    }
+                }
+            } else {
+                Section("Library") {
+                    row(.library(.all), "All", systemImage: "square.stack", count: state.mcpServers.count)
+                    row(.library(.drift), "Missing", systemImage: "circle.dashed",
+                        count: state.mcpDriftCount, iconTint: state.mcpDriftCount > 0 ? Theme.drift : nil)
+                    row(.library(.diverged), "Diverged", systemImage: "arrow.triangle.branch",
+                        count: state.mcpDivergedCount)
+                }
+
+                Section("Harnesses") {
+                    ForEach(McpHarness.allCases) { harness in
+                        row(.mcpHarness(harness), harness.displayName,
+                            dot: harness.color, count: state.mcpCount(for: harness))
                     }
                 }
             }

@@ -3,6 +3,7 @@ import SwiftUI
 struct SkillListView: View {
     @EnvironmentObject var state: AppState
     @State private var showInstall = false
+    @State private var showAddMcp = false
 
     /// True when in Project scope but no project is chosen yet — install needs a target.
     private var needsProject: Bool {
@@ -12,8 +13,7 @@ struct SkillListView: View {
     var body: some View {
         Group {
             if state.kind == .mcp {
-                ContentUnavailableView("MCP — coming soon", systemImage: "puzzlepiece.extension",
-                    description: Text("MCP server discovery isn't available yet."))
+                McpListView()
             } else {
                 List(state.filteredSkills, selection: $state.selection) { skill in
                     SkillRow(skill: skill)
@@ -49,12 +49,21 @@ struct SkillListView: View {
                 }
             }
             ToolbarItem(placement: .primaryAction) {
-                Button { showInstall = true } label: {
-                    Label("Install skill…", systemImage: "plus")
+                if state.kind == .mcp {
+                    Button { showAddMcp = true } label: {
+                        Label("Add MCP server…", systemImage: "plus")
+                    }
+                    .tint(McpHarness.claudeCode.color)
+                    .disabled(needsProject)
+                    .help(needsProject ? "Choose a project first" : "Add an MCP server to your harnesses")
+                } else {
+                    Button { showInstall = true } label: {
+                        Label("Install skill…", systemImage: "plus")
+                    }
+                    .tint(Agent.claude.color)
+                    .disabled(needsProject)
+                    .help(needsProject ? "Choose a project first" : "Install a skill from a source")
                 }
-                .tint(Agent.claude.color)
-                .disabled(needsProject || state.kind == .mcp)
-                .help(needsProject ? "Choose a project first" : "Install a skill from a source")
             }
             ToolbarItem(placement: .primaryAction) {
                 // Small inline refresh spinner so a reload of an already-populated list shows progress.
@@ -69,6 +78,7 @@ struct SkillListView: View {
             }
         }
         .sheet(isPresented: $showInstall) { InstallSheet() }
+        .sheet(isPresented: $showAddMcp) { McpServerSheet(mode: .add) }
     }
 
     private var emptyHint: String {

@@ -11,14 +11,26 @@ struct ContentView: View {
             SkillListView()
                 .navigationSplitViewColumnWidth(min: 300, ideal: 350)
         } detail: {
-            if let skill = state.selectedSkill {
-                SkillDetailView(skill: skill)
+            if state.kind == .skill {
+                if let skill = state.selectedSkill {
+                    SkillDetailView(skill: skill)
+                } else {
+                    ContentUnavailableView(
+                        "Select a skill",
+                        systemImage: "sparkles",
+                        description: Text("\(state.skills.count) \(state.scopeMode.label.lowercased()) skills across your agents")
+                    )
+                }
             } else {
-                ContentUnavailableView(
-                    "Select a skill",
-                    systemImage: "sparkles",
-                    description: Text("\(state.skills.count) \(state.scopeMode.label.lowercased()) skills across your agents")
-                )
+                if let server = state.selectedMcpServer {
+                    McpDetailView(server: server)
+                } else {
+                    ContentUnavailableView(
+                        "Select an MCP server",
+                        systemImage: "puzzlepiece.extension",
+                        description: Text("\(state.mcpServers.count) \(state.scopeMode.label.lowercased()) MCP servers across your harnesses")
+                    )
+                }
             }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) { StatusBar() }
@@ -39,10 +51,23 @@ struct StatusBar: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            Text("\(state.skills.count) skills")
-            dot
-            Text("\(state.driftCount) drift")
-                .foregroundStyle(state.driftCount > 0 ? Theme.drift : .secondary)
+            if state.kind == .skill {
+                Text("\(state.skills.count) skills")
+                dot
+                Text("\(state.driftCount) drift")
+                    .foregroundStyle(state.driftCount > 0 ? Theme.drift : .secondary)
+            } else {
+                Text("\(state.mcpServers.count) servers")
+                dot
+                Text("\(state.mcpDivergedCount) diverged")
+                    .foregroundStyle(state.mcpDivergedCount > 0 ? Theme.drift : .secondary)
+                if !state.mcpIssues.isEmpty {
+                    dot
+                    Label("\(state.mcpIssues.count) unreadable",
+                          systemImage: "exclamationmark.triangle")
+                        .foregroundStyle(Theme.drift)
+                }
+            }
             dot
             Text(state.scopeMode == .global ? "Global" : (state.selectedProject?.lastPathComponent ?? "Project"))
             Spacer()
