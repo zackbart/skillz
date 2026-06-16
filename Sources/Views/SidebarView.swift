@@ -52,7 +52,7 @@ struct SidebarView: View {
             }
 
             Section("Agents") {
-                ForEach(Agent.allCases) { agent in
+                ForEach(Agent.sidebarAgents) { agent in
                     selectRow(
                         selected: state.selectedAgent == agent,
                         toggle: { state.selectedAgent = state.selectedAgent == agent ? nil : agent }

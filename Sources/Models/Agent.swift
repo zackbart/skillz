@@ -15,6 +15,11 @@ enum Agent: String, CaseIterable, Identifiable, Hashable, Codable {
     /// The real agents shown as badges/columns (the canonical store is not an agent runtime).
     static let displayAgents: [Agent] = [.claude, .opencode, .codex, .pi]
 
+    /// Agents worth their own sidebar filter row. OpenCode, Codex and Pi read the canonical
+    /// store natively, so their counts always equal Canonical's — listing them is redundant.
+    /// Only Claude Code (needs its own symlink) and the Canonical store are distinct.
+    static let sidebarAgents: [Agent] = [.claude, .agents]
+
     var displayName: String {
         switch self {
         case .claude: return "Claude Code"
