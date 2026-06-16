@@ -30,6 +30,11 @@ struct Skill: AgentResource {
     var frontmatterKeys: [String]
     var rawFrontmatter: String
 
+    /// Top-level files/dirs packaged alongside SKILL.md in the canonical skill dir
+    /// (reference docs, scripts, templates, assets). Excludes SKILL.md itself. Sorted
+    /// dirs-first then by name; `isDirectory` lets the UI pick a folder vs file glyph.
+    var bundledFiles: [BundledFile] = []
+
     var kind: ResourceKind { .skill }
 
     /// Agents whose own dir references this skill on disk (real dir OR symlink).
@@ -94,6 +99,14 @@ struct Skill: AgentResource {
 
     /// Agents the CLI declares but that genuinely can't reach the skill (drift).
     var driftMissing: Set<Agent> { declaredAgents.subtracting(availableAgents) }
+}
+
+/// A file or directory packaged inside a skill, surfaced in the detail view.
+struct BundledFile: Hashable, Identifiable {
+    let url: URL
+    let isDirectory: Bool
+    var id: String { url.path }
+    var name: String { url.lastPathComponent }
 }
 
 /// How an agent gets access to a skill.

@@ -15,16 +15,8 @@ enum SkillScanner {
     }
 
     static func scanProject(root: URL) -> [Skill] {
-        // Bases to probe for agent skill dirs: ancestors (chosen dir → git root) plus
-        // descendants up to `maxDescentDepth` levels (monorepos nest .claude/.agents in
-        // subpackages). Dedupe by standardized path, preserving discovery order.
-        var bases = ancestorRoots(from: root)
-        bases.append(contentsOf: descendantRoots(from: root))
-        var seen = Set<String>()
-        let uniqueBases = bases.filter { seen.insert($0.standardizedFileURL.path).inserted }
-
         var dirs: [(Agent, [URL])] = []
-        for base in uniqueBases {
+        for base in projectBases(from: root) {
             for agent in Agent.allCases {
                 dirs.append((agent, agent.projectSkillDirs.map { base.appendingPathComponent($0) }))
             }
@@ -100,6 +92,7 @@ enum SkillScanner {
                     skill.isCLIManaged = (prov != nil)
                     if isLink { skill.symlinkedAgents = [agent] }
                     skill.declaredAgents = declared[key] ?? []
+                    skill.bundledFiles = bundledFiles(in: canonical, fm: fm)
                     byCanonical[key] = skill
                 }
             }
@@ -169,6 +162,30 @@ enum SkillScanner {
         if bp == rp { return "" }
         if bp.hasPrefix(rp + "/") { return String(bp.dropFirst(rp.count + 1)) }
         return "↑ " + base.lastPathComponent
+    }
+
+    // MARK: - Base discovery
+
+    /// Bases to probe for agent skill dirs: ancestors (chosen dir → git root) plus
+    /// descendants up to `maxDescentDepth` levels (monorepos nest .claude/.agents in
+    /// subpackages). Deduped by standardized path, preserving discovery order.
+    static func projectBases(from root: URL) -> [URL] {
+        var bases = ancestorRoots(from: root)
+        bases.append(contentsOf: descendantRoots(from: root))
+        var seen = Set<String>()
+        return bases.filter { seen.insert($0.standardizedFileURL.path).inserted }
+    }
+
+    /// Every agent skill dir the project scan looks at, for the FileWatcher. Covers the
+    /// same ancestor+descendant bases `scanProject` scans — so edits to a nested package's
+    /// `.claude/skills` fire a reload, not just the chosen root's. FileWatcher filters out
+    /// paths that don't exist, so we needn't stat here.
+    static func projectSkillDirPaths(from root: URL) -> [String] {
+        projectBases(from: root).flatMap { base in
+            Agent.allCases.flatMap { agent in
+                agent.projectSkillDirs.map { base.appendingPathComponent($0).path }
+            }
+        }
     }
 
     // MARK: - Helpers
@@ -241,6 +258,21 @@ enum SkillScanner {
         let s = String(data: out.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return s.isEmpty ? nil : URL(fileURLWithPath: s)
+    }
+
+    /// Top-level entries packaged with a skill (excluding SKILL.md), dirs-first then by
+    /// name. One `contentsOfDirectory` per unique skill — a cheap FS read, no subprocess.
+    private static func bundledFiles(in canonical: URL, fm: FileManager) -> [BundledFile] {
+        guard let entries = try? fm.contentsOfDirectory(
+            at: canonical, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]
+        ) else { return [] }
+        return entries
+            .filter { $0.lastPathComponent != "SKILL.md" }
+            .map { BundledFile(url: $0, isDirectory: (try? $0.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true) }
+            .sorted {
+                if $0.isDirectory != $1.isDirectory { return $0.isDirectory && !$1.isDirectory }
+                return $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
+            }
     }
 
     private static func declaredByPath(_ items: [CLISkill]) -> [String: Set<Agent>] {

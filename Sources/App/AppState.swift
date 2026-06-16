@@ -97,6 +97,14 @@ final class AppState: ObservableObject {
     private let scopeKey = "scopeMode"
     /// Bumped on every reload; a detached scan only applies if it's still the latest.
     private var reloadGeneration = 0
+    /// Last-known scan per scope. Seeded into `skills` instantly on a switch, then a fresh
+    /// scan always follows and overwrites — a pure render optimization, not a staleness risk.
+    private var scanCache: [ResourceScope: [Skill]] = [:]
+    /// Which scope `skills` currently reflects — drives the seed-on-switch path.
+    private var skillsScope: ResourceScope?
+    /// Skill dirs the latest scan looked at; what the FileWatcher should watch. Captured
+    /// from the scan (incl. nested ancestor/descendant bases) so nested edits fire reloads.
+    private var watchPaths: [String] = []
 
     init() {
         savedProjects = (UserDefaults.standard.array(forKey: projectsKey) as? [String])?
@@ -274,6 +282,15 @@ final class AppState: ObservableObject {
     // MARK: - Loading
 
     func reload() {
+        let key = currentScope
+        // On a scope/project SWITCH, paint the target scope's last-known list immediately
+        // (instant feel), or clear the previous scope's list so a stale wrong-project list
+        // never lingers. The background scan below always refreshes it.
+        if skillsScope != key {
+            skills = scanCache[key] ?? []
+            skillsScope = key
+            reconcileSelection()
+        }
         isLoading = true
         reloadGeneration &+= 1
         let gen = reloadGeneration
@@ -285,6 +302,10 @@ final class AppState: ObservableObject {
             case .global: scanned = SkillScanner.scanGlobal()
             case .project: scanned = project.map { SkillScanner.scanProject(root: $0) } ?? []
             }
+            // Always watch the canonical store; in project scope also watch every skill dir
+            // the scan touched (incl. nested bases) so nested edits trigger a reload.
+            var watch = Agent.allCases.flatMap { $0.globalSkillDirs.map(\.path) }
+            if mode == .project, let project { watch += SkillScanner.projectSkillDirPaths(from: project) }
             let cli = SkillsCLIService.isAvailable
             let git = GitStatusService.isAvailable
             await MainActor.run {
@@ -292,6 +313,9 @@ final class AppState: ObservableObject {
                 // so a slow global scan can't overwrite the current project's list.
                 guard gen == self.reloadGeneration else { return }
                 self.skills = scanned
+                self.scanCache[key] = scanned
+                self.skillsScope = key
+                self.watchPaths = watch
                 self.cliAvailable = cli
                 self.gitAvailable = git
                 self.isLoading = false
@@ -315,17 +339,10 @@ final class AppState: ObservableObject {
     }
 
     private func updateWatcher() {
-        // Always watch the global/canonical dirs so edits to a symlinked skill's real
-        // files (under ~/.agents/skills) fire a reload regardless of scope.
-        var paths = Agent.allCases.flatMap { $0.globalSkillDirs.map(\.path) }
-        if scopeMode == .project, let root = selectedProject {
-            for agent in Agent.allCases {
-                for rel in agent.projectSkillDirs {
-                    paths.append(root.appendingPathComponent(rel).path)
-                }
-            }
-        }
-        watcher?.start(paths: paths)
+        // Watch exactly the dirs the latest scan looked at (canonical store + every project
+        // skill dir incl. nested bases), captured in `watchPaths` so a symlinked skill's
+        // real files and nested-package skills both fire reloads.
+        watcher?.start(paths: watchPaths)
     }
 
     // MARK: - Mutations
@@ -483,5 +500,14 @@ final class AppState: ObservableObject {
 
     func openInEditor(_ skill: Skill) {
         NSWorkspace.shared.open(skill.skillMdURL)
+    }
+
+    /// Open a bundled file in its default app, or reveal a packaged subdirectory in Finder.
+    func openBundledFile(_ file: BundledFile) {
+        if file.isDirectory {
+            NSWorkspace.shared.activateFileViewerSelecting([file.url])
+        } else {
+            NSWorkspace.shared.open(file.url)
+        }
     }
 }

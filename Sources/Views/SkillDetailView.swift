@@ -20,6 +20,7 @@ struct SkillDetailView: View {
                 if !skill.driftMissing.isEmpty { driftCard }
                 if let p = skill.provenance, !p.source.isEmpty { provenanceSection(p) }
                 if !skill.frontmatterKeys.isEmpty { frontmatterSection }
+                if !skill.bundledFiles.isEmpty { filesSection }
                 bodySection
             }
             .padding(22)
@@ -196,6 +197,30 @@ struct SkillDetailView: View {
                 .font(.system(.caption, design: .monospaced))
                 .foregroundStyle(.secondary)
                 .textSelection(.enabled)
+        }
+    }
+
+    private var filesSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            sectionTitle("Packaged files")
+            FlowRow(spacing: 7) {
+                ForEach(skill.bundledFiles) { file in
+                    Button { state.openBundledFile(file) } label: {
+                        HStack(spacing: 5) {
+                            Image(systemName: file.isDirectory ? "folder.fill" : "doc")
+                                .font(.caption2)
+                            Text(file.name + (file.isDirectory ? "/" : ""))
+                                .font(.caption.weight(.medium))
+                        }
+                        .padding(.horizontal, 9).padding(.vertical, 4)
+                        .background(Color.secondary.opacity(0.12), in: Capsule())
+                    }
+                    .buttonStyle(.plain)
+                    .help(file.isDirectory ? "Reveal \(file.name) in Finder" : "Open \(file.name)")
+                }
+            }
+            Text("Files bundled with this skill alongside SKILL.md.")
+                .font(.caption2).foregroundStyle(.tertiary)
         }
     }
 
