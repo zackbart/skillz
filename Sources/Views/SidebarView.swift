@@ -31,8 +31,8 @@ struct SidebarView: View {
                 .labelsHidden()
                 .onChange(of: state.scopeMode) { _, mode in
                     state.resetFilters()
-                    if mode == .project && state.selectedProject == nil {
-                        state.chooseProject()
+                    if mode == .project {
+                        state.enterProjectScope()
                     } else {
                         state.reload()
                     }

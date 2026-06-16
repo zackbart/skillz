@@ -70,7 +70,7 @@ enum SidebarFilter: Hashable {
 final class AppState: ObservableObject {
     // Navigation / filters
     @Published var kind: ResourceKind = .skill
-    @Published var scopeMode: ScopeMode = .global
+    @Published var scopeMode: ScopeMode = .global { didSet { persistScope() } }
     @Published var selectedProject: URL?
     /// Projects the user has saved — persisted indefinitely, switchable, removable.
     @Published var savedProjects: [URL] = []
@@ -93,12 +93,28 @@ final class AppState: ObservableObject {
 
     private var watcher: FileWatcher?
     private let projectsKey = "recentProjects" // key kept for continuity with existing data
+    private let activeProjectKey = "activeProject"
+    private let scopeKey = "scopeMode"
     /// Bumped on every reload; a detached scan only applies if it's still the latest.
     private var reloadGeneration = 0
 
     init() {
         savedProjects = (UserDefaults.standard.array(forKey: projectsKey) as? [String])?
             .map { URL(fileURLWithPath: $0) } ?? []
+        // Remember the last active project so switching to the Project tab is instant
+        // (only restore it if it's still a saved project).
+        if let path = UserDefaults.standard.string(forKey: activeProjectKey),
+           savedProjects.contains(where: { $0.path == path }) {
+            selectedProject = URL(fileURLWithPath: path)
+        } else {
+            selectedProject = savedProjects.first
+        }
+        // Resume the last scope — but never strand in Project scope with no project.
+        if let raw = UserDefaults.standard.string(forKey: scopeKey),
+           let saved = ScopeMode(rawValue: raw) {
+            scopeMode = saved
+        }
+        if scopeMode == .project && selectedProject == nil { scopeMode = .global }
         watcher = FileWatcher { [weak self] in self?.reload() }
     }
 
@@ -175,13 +191,24 @@ final class AppState: ObservableObject {
 
     // MARK: - Project selection
 
+    /// Enter Project scope WITHOUT nagging: reuse the active project, else the first saved
+    /// one, and only pop the picker on a genuine first run (no projects at all).
+    func enterProjectScope() {
+        if selectedProject != nil {
+            reload()
+        } else if let first = savedProjects.first {
+            setProject(first)
+        } else {
+            chooseProject()
+        }
+    }
+
+    /// Open the folder picker to add/switch a project. Only the explicit "Add project…"
+    /// action and first-run should call this — never a bare tab toggle.
     func chooseProject() {
-        let previousScope = scopeMode
-        let hadProject = selectedProject != nil
         // Present on the NEXT runloop tick. Running a modal panel synchronously from inside
-        // a SwiftUI view update (the scope picker's onChange) can silently no-op — the panel
-        // never appears, so clicking "Project" looks like nothing happens. Deferring escapes
-        // the update cycle; activating brings the panel to the front.
+        // a SwiftUI view update can silently no-op; deferring escapes the update cycle and
+        // activating brings the panel to the front.
         Task { @MainActor in
             NSApp.activate(ignoringOtherApps: true)
             let panel = NSOpenPanel()
@@ -192,12 +219,16 @@ final class AppState: ObservableObject {
             panel.message = "Choose a project directory to scan its skills."
             if panel.runModal() == .OK, let url = panel.url {
                 self.setProject(url)
-            } else {
-                // Cancelled: restore the prior scope (or fall back to Global with no project)
-                // so we never strand in an empty Project scope or drop an existing project.
-                self.scopeMode = hadProject ? previousScope : .global
-                self.reload()
+            } else if self.selectedProject == nil {
+                // Cancelled with nothing to show: activate a saved project, else go Global.
+                if let first = self.savedProjects.first {
+                    self.setProject(first)
+                } else {
+                    self.scopeMode = .global
+                    self.reload()
+                }
             }
+            // Cancelled but a project is already active → just keep showing it.
         }
     }
 
@@ -211,6 +242,7 @@ final class AppState: ObservableObject {
             savedProjects.insert(url, at: 0)
             persistProjects()
         }
+        persistActiveProject()
         reload()
     }
 
@@ -221,6 +253,7 @@ final class AppState: ObservableObject {
         persistProjects()
         if selectedProject?.path == url.path {
             selectedProject = savedProjects.first
+            persistActiveProject()
             if selectedProject == nil { scopeMode = .global }
             reload()
         }
@@ -228,6 +261,14 @@ final class AppState: ObservableObject {
 
     private func persistProjects() {
         UserDefaults.standard.set(savedProjects.map(\.path), forKey: projectsKey)
+    }
+
+    private func persistActiveProject() {
+        UserDefaults.standard.set(selectedProject?.path, forKey: activeProjectKey)
+    }
+
+    private func persistScope() {
+        UserDefaults.standard.set(scopeMode.rawValue, forKey: scopeKey)
     }
 
     // MARK: - Loading
