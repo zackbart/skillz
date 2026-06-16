@@ -1,4 +1,4 @@
-name: SkillsSeer
+name: Skillz
 options:
   bundleIdPrefix: dev.zackbart
   deploymentTarget:
@@ -9,7 +9,7 @@ packages:
     url: https://github.com/jpsim/Yams
     from: "5.0.6"
 targets:
-  SkillsSeer:
+  Skillz:
     type: application
     platform: macOS
     sources:
@@ -18,12 +18,12 @@ targets:
       - package: Yams
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: dev.zackbart.skillsseer
+        PRODUCT_BUNDLE_IDENTIFIER: dev.zackbart.skillz
         MARKETING_VERSION: "0.1.0"
         CURRENT_PROJECT_VERSION: "1"
         SWIFT_VERSION: "5.0"
         GENERATE_INFOPLIST_FILE: YES
-        INFOPLIST_KEY_CFBundleDisplayName: SkillsSeer
+        INFOPLIST_KEY_CFBundleDisplayName: Skillz
         INFOPLIST_KEY_LSApplicationCategoryType: "public.app-category.developer-tools"
         INFOPLIST_KEY_NSHumanReadableCopyright: "MIT Licensed"
         ENABLE_HARDENED_RUNTIME: YES

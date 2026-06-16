@@ -1,4 +1,4 @@
-# SkillsSeer — Research & Context
+# Skillz — Research & Context
 
 > Deep-research synthesis for a native macOS app that discovers, visualizes, and manages
 > AI-agent **skills** across Claude Code, OpenCode, Codex, and Pi — built on the
@@ -248,6 +248,6 @@ skills; user skills are reached via the canonical store.
 To make a skill available everywhere: **write it to `.agents/skills`, then symlink only the
 NON-universal agents** — Claude Code always; Pi as belt-and-suspenders. Universal agents
 (Codex, OpenCode, + amp/cline/cursor/…) need nothing. This is exactly what `npx skills` does,
-and what SkillsSeer's drift-fix now mirrors (relative symlink into `.claude/skills`).
+and what Skillz's drift-fix now mirrors (relative symlink into `.claude/skills`).
 So at global scope, the only agent that legitimately shows drift for a canonical-present skill
 is **Claude Code**.

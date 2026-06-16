@@ -6,7 +6,7 @@ import CoreServices
 /// symlinked skill's real files (under `~/.agents/skills`) are caught too.
 final class FileWatcher {
     private var stream: FSEventStreamRef?
-    private let queue = DispatchQueue(label: "dev.zackbart.skillsseer.fswatch")
+    private let queue = DispatchQueue(label: "dev.zackbart.skillz.fswatch")
     private var debounceItem: DispatchWorkItem?
     private let debounce: TimeInterval
     private let onChange: () -> Void

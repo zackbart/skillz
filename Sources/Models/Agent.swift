@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// The coding agents SkillsSeer understands, plus the skills.sh canonical store.
+/// The coding agents Skillz understands, plus the skills.sh canonical store.
 /// Paths are verified ground truth (see RESEARCH.md). `agents` is the
 /// `~/.agents/skills` canonical store that skills.sh symlinks every agent back into.
 enum Agent: String, CaseIterable, Identifiable, Hashable, Codable {

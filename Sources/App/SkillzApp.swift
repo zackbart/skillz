@@ -1,7 +1,7 @@
 import SwiftUI
 
 @main
-struct SkillsSeerApp: App {
+struct SkillzApp: App {
     @StateObject private var state = AppState()
 
     var body: some Scene {

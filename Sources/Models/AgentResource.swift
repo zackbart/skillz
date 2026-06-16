@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// The kinds of resource SkillsSeer can manage. MCP is reserved (D3) — discovery
+/// The kinds of resource Skillz can manage. MCP is reserved (D3) — discovery
 /// is not implemented yet, but the model + UI leave the door open.
 enum ResourceKind: String, Hashable, CaseIterable {
     case skill

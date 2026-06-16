@@ -1,4 +1,4 @@
-# SkillsSeer — Decisions
+# Skillz — Decisions
 
 A running log of the choices that shape the app, so future work doesn't re-litigate them.
 

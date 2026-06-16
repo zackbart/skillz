@@ -1,4 +1,4 @@
-# SkillsSeer
+# Skillz
 
 A native macOS app that shows every AI-agent **skill** installed on your machine —
 across **Claude Code, OpenCode, Codex, and Pi** — at both the global and (soon) project
@@ -33,8 +33,8 @@ Stop digging through dotfiles to see what skills each agent actually has.
 
 ```bash
 brew install xcodegen        # one-time
-xcodegen generate            # generates SkillsSeer.xcodeproj from project.yml
-open SkillsSeer.xcodeproj    # then ⌘R
+xcodegen generate            # generates Skillz.xcodeproj from project.yml
+open Skillz.xcodeproj         # then ⌘R
 ```
 
 The Xcode project is generated — edit `project.yml`, not the `.xcodeproj`.
