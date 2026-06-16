@@ -46,24 +46,31 @@ public actor SSHTransport: HerdrTransport {
         } catch {
             throw HerdrError.connectionFailed("Couldn't connect to \(host.displayName): \(error)")
         }
-        self.client = client
 
-        // Resolve the socket path once: honour an explicit override, otherwise
-        // probe the documented locations so the user never has to know where
-        // Herdr keeps its socket.
+        // Resolve the socket path before publishing any state, so a discovery
+        // failure can't leave the actor half-connected (client set, socketPath
+        // nil) with the SSH session leaked.
+        let resolved: String
         let override = host.socketPath.trimmingCharacters(in: .whitespacesAndNewlines)
         if !override.isEmpty {
-            socketPath = override
+            resolved = override
         } else {
-            let found = try await discoverSocketPaths(client: client)
-            guard let chosen = found.first else {
-                throw HerdrError.connectionFailed(
-                    "Couldn't find a running Herdr socket on \(host.displayName) (looked under "
-                    + "~/.config/herdr). Is Herdr running there?"
-                )
+            do {
+                let found = try await discoverSocketPaths(client: client)
+                guard let chosen = found.first else {
+                    throw HerdrError.connectionFailed(
+                        "Couldn't find a running Herdr socket on \(host.displayName) (looked under "
+                        + "~/.config/herdr). Is Herdr running there?"
+                    )
+                }
+                resolved = chosen
+            } catch {
+                try? await client.close()
+                throw error
             }
-            socketPath = chosen
         }
+        self.client = client
+        self.socketPath = resolved
     }
 
     public func disconnect() async {
@@ -93,15 +100,23 @@ public actor SSHTransport: HerdrTransport {
                         }
                     }
                 } catch {
-                    // The server closes the socket after the one-shot reply; the
-                    // bridge then EOFs and the channel close surfaces here.
+                    // After a one-shot reply the server closes the socket, so the
+                    // bridge EOFs and the channel close surfaces here — expected
+                    // once we have a response, but a real failure otherwise.
+                    collector.failure = error
                 }
             }
         } catch {
-            // Channel close can also surface from withExec itself.
+            collector.failure = collector.failure ?? error
         }
-        guard let response = collector.response else { throw HerdrError.transportClosed }
-        return response
+        if let response = collector.response { return response }
+        if let failure = collector.failure {
+            throw HerdrError.connectionFailed(
+                "The Herdr socket bridge failed: \(failure). Check that `nc` (or `socat`) is "
+                + "available on the host and the socket path is correct."
+            )
+        }
+        throw HerdrError.transportClosed
     }
 
     // MARK: Events (persistent subscription channel)
@@ -145,6 +160,7 @@ public actor SSHTransport: HerdrTransport {
     private final class Collector: @unchecked Sendable {
         var buffer = LineBuffer()
         var response: RPCResponse?
+        var failure: Error?
     }
 
     private static func data(_ buffer: ByteBuffer) -> Data {
@@ -217,8 +233,21 @@ public actor SSHTransport: HerdrTransport {
     /// (tilde expansion doesn't fire mid-word, but `$HOME` does). For the
     /// one-shot model, `nc -U` is sufficient; `socat` is used if present.
     static func bridgeCommand(socketPath: String) -> String {
-        let expanded = socketPath.hasPrefix("~") ? "$HOME" + socketPath.dropFirst() : socketPath
-        let quoted = "\"\(expanded)\""
-        return "socat - UNIX-CONNECT:\(quoted) || nc -U \(quoted)"
+        // Build a shell-safe target. A leading `~` becomes an unquoted `"$HOME"`
+        // (so the remote shell expands it); the remainder is single-quoted so an
+        // override path can't inject shell syntax.
+        let target: String
+        if socketPath.hasPrefix("~") {
+            target = "\"$HOME\"" + singleQuoted(String(socketPath.dropFirst()))
+        } else {
+            target = singleQuoted(socketPath)
+        }
+        return "socat - UNIX-CONNECT:\(target) || nc -U \(target)"
+    }
+
+    /// POSIX single-quote escaping: wrap in `'…'`, closing/escaping/reopening for
+    /// any embedded single quote.
+    private static func singleQuoted(_ string: String) -> String {
+        "'" + string.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 }
