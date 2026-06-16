@@ -101,11 +101,13 @@ public actor HerdrClient {
         ]))
     }
 
-    /// Send a key press (e.g. `"Enter"`) to a pane.
-    public func sendKeys(_ keys: String, to pane: PaneID) async throws {
+    /// Send one or more named key presses to a pane. Key names use Herdr's
+    /// syntax: plain names (`Enter`, `Esc`, `Tab`, `Up`…) and modifier combos
+    /// with `+` (`ctrl+b`, `ctrl+c`). The wire field is a sequence.
+    public func sendKeys(_ keys: String..., to pane: PaneID) async throws {
         _ = try await call(Method.paneSendKeys, .object([
             "pane_id": .string(pane.rawValue),
-            "keys": .string(keys),
+            "keys": .array(keys.map(JSONValue.string)),
         ]))
     }
 
