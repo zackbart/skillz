@@ -85,6 +85,8 @@ final class AppState: ObservableObject {
 
     private var watcher: FileWatcher?
     private let recentsKey = "recentProjects"
+    /// Bumped on every reload; a detached scan only applies if it's still the latest.
+    private var reloadGeneration = 0
 
     init() {
         recentProjects = (UserDefaults.standard.array(forKey: recentsKey) as? [String])?
@@ -202,6 +204,8 @@ final class AppState: ObservableObject {
 
     func reload() {
         isLoading = true
+        reloadGeneration &+= 1
+        let gen = reloadGeneration
         let mode = scopeMode
         let project = selectedProject
         Task.detached(priority: .userInitiated) {
@@ -213,6 +217,9 @@ final class AppState: ObservableObject {
             let cli = SkillsCLIService.isAvailable
             let git = GitStatusService.isAvailable
             await MainActor.run {
+                // Drop a scan that a newer reload (e.g. a scope switch) has superseded,
+                // so a slow global scan can't overwrite the current project's list.
+                guard gen == self.reloadGeneration else { return }
                 self.skills = scanned
                 self.cliAvailable = cli
                 self.gitAvailable = git
@@ -373,7 +380,17 @@ final class AppState: ObservableObject {
         let relTarget = relativePath(from: dir.path, to: skill.canonicalPath)
         do {
             try fm.createDirectory(at: dir, withIntermediateDirectories: true)
-            try? fm.removeItem(at: link) // clear a stale/broken link if present
+            // Only clear an existing SYMLINK (stale/broken) — never recursively delete a
+            // real file or directory that happens to sit at the link path. lstat semantics:
+            // attributesOfItem does not follow the link, so a symlink reports .typeSymbolicLink.
+            if let attrs = try? fm.attributesOfItem(atPath: link.path) {
+                if (attrs[.type] as? FileAttributeType) == .typeSymbolicLink {
+                    try fm.removeItem(at: link)
+                } else {
+                    return CLIResult(exitCode: 1, stdout: "",
+                        stderr: "A real file already exists at \(link.path); refusing to overwrite it.")
+                }
+            }
             try fm.createSymbolicLink(atPath: link.path, withDestinationPath: relTarget)
             return CLIResult(exitCode: 0, stdout: "Wired \(skill.name) → \(agent.displayName)", stderr: "")
         } catch {

@@ -108,13 +108,33 @@ enum SkillsCLIService {
         } catch {
             return CLIResult(exitCode: 126, stdout: "", stderr: error.localizedDescription)
         }
-        // Read BEFORE waitUntilExit to avoid a pipe-buffer deadlock on large output.
-        let o = out.fileHandleForReading.readDataToEndOfFile()
-        let e = err.fileHandleForReading.readDataToEndOfFile()
+        // Drain stdout AND stderr CONCURRENTLY before waiting: reading one to EOF first
+        // would deadlock if the child fills the other pipe's buffer while it's still open.
+        let outBox = DataBox(), errBox = DataBox()
+        let group = DispatchGroup()
+        DispatchQueue.global().async(group: group) {
+            outBox.data = out.fileHandleForReading.readDataToEndOfFile()
+        }
+        DispatchQueue.global().async(group: group) {
+            errBox.data = err.fileHandleForReading.readDataToEndOfFile()
+        }
+        group.wait()
         p.waitUntilExit()
         return CLIResult(exitCode: p.terminationStatus,
-                         stdout: String(decoding: o, as: UTF8.self),
-                         stderr: String(decoding: e, as: UTF8.self))
+                         stdout: String(decoding: outBox.data, as: UTF8.self),
+                         stderr: String(decoding: errBox.data, as: UTF8.self))
+    }
+
+    /// Mutable reference box so the two concurrent pipe-reader closures each write a
+    /// distinct slot; `group.wait()` establishes the happens-before before we read them.
+    private final class DataBox: @unchecked Sendable { var data = Data() }
+
+    /// `-a` takes the agent slugs as separate following tokens (one flag, many values) —
+    /// NOT a comma-joined string, which the CLI would treat as a single invalid slug.
+    /// Placed last by callers so the variadic flag can't swallow a trailing option.
+    private static func agentArgs(_ agents: [Agent]) -> [String] {
+        let slugs = agents.compactMap { slug(for: $0) }
+        return slugs.isEmpty ? [] : ["-a"] + slugs
     }
 
     /// Scope→(extra args, cwd). Project ops are cwd-sensitive: pass `-p` AND set cwd.
@@ -125,24 +145,22 @@ enum SkillsCLIService {
     }
 
     /// INSTALL a whole package or a specific skill into specific agents.
-    /// `skills add <ref> [-s <skill>] [-a <slug,...>] (-g|-p) -y [--copy]`
+    /// `skills add <ref> [-s <skill>] (-g|-p) -y [--copy] [-a <slug>...]`
     static func add(ref: String, skill: String? = nil, agents: [Agent] = [], scope: ResourceScope, copy: Bool = false) -> CLIResult {
         let s = scopeArgs(scope)
         var a = ["add", ref] + s.args + ["-y"]
         if let skill { a += ["-s", skill] }
-        let slugs = agents.compactMap { slug(for: $0) }
-        if !slugs.isEmpty { a += ["-a", slugs.joined(separator: ",")] }
         if copy { a += ["--copy"] }
+        a += agentArgs(agents) // variadic flag last
         return runCapturing(arguments: a, cwd: s.cwd)
     }
 
     /// REMOVE a skill fully, or unwire from specific agents only (`-a`).
-    /// `skills remove <name> [-a <slug,...>] (-g|-p) -y`
+    /// `skills remove <name> (-g|-p) -y [-a <slug>...]`
     static func remove(name: String, agents: [Agent] = [], scope: ResourceScope) -> CLIResult {
         let s = scopeArgs(scope)
         var a = ["remove", name] + s.args + ["-y"]
-        let slugs = agents.compactMap { slug(for: $0) }
-        if !slugs.isEmpty { a += ["-a", slugs.joined(separator: ",")] }
+        a += agentArgs(agents) // variadic flag last
         return runCapturing(arguments: a, cwd: s.cwd)
     }
 

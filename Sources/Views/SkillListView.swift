@@ -138,8 +138,9 @@ struct InstallSheet: View {
                     .keyboardShortcut(.cancelAction)
                 Button("Install") {
                     didSubmit = true
+                    let trimmedSkill = skillName.trimmingCharacters(in: .whitespaces)
                     state.install(ref: ref.trimmingCharacters(in: .whitespaces),
-                                  skill: skillName.isEmpty ? nil : skillName.trimmingCharacters(in: .whitespaces))
+                                  skill: trimmedSkill.isEmpty ? nil : trimmedSkill)
                 }
                 .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.defaultAction)
