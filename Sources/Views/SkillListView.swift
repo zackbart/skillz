@@ -42,7 +42,6 @@ struct SkillListView: View {
                             Text("Fix all drift")
                         }
                     }
-                    .buttonStyle(.glassProminent)
                     .tint(Theme.drift)
                     .controlSize(.small)
                     .disabled(state.actionStatus.isRunning || state.isLoading)
@@ -53,7 +52,6 @@ struct SkillListView: View {
                 Button { showInstall = true } label: {
                     Label("Install skill…", systemImage: "plus")
                 }
-                .buttonStyle(.glassProminent)
                 .tint(Agent.claude.color)
                 .disabled(needsProject || state.kind == .mcp)
                 .help(needsProject ? "Choose a project first" : "Install a skill from a source")
