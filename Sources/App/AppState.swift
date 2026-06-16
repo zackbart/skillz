@@ -174,18 +174,26 @@ final class AppState: ObservableObject {
     func chooseProject() {
         let previousScope = scopeMode
         let hadProject = selectedProject != nil
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.allowsMultipleSelection = false
-        panel.prompt = "Choose Project"
-        if panel.runModal() == .OK, let url = panel.url {
-            setProject(url)
-        } else {
-            // Cancelled: restore the prior scope (or fall back to Global with no project)
-            // so we never strand in an empty Project scope or drop an existing project.
-            scopeMode = hadProject ? previousScope : .global
-            reload()
+        // Present on the NEXT runloop tick. Running a modal panel synchronously from inside
+        // a SwiftUI view update (the scope picker's onChange) can silently no-op — the panel
+        // never appears, so clicking "Project" looks like nothing happens. Deferring escapes
+        // the update cycle; activating brings the panel to the front.
+        Task { @MainActor in
+            NSApp.activate(ignoringOtherApps: true)
+            let panel = NSOpenPanel()
+            panel.canChooseDirectories = true
+            panel.canChooseFiles = false
+            panel.allowsMultipleSelection = false
+            panel.prompt = "Choose Project"
+            panel.message = "Choose a project directory to scan its skills."
+            if panel.runModal() == .OK, let url = panel.url {
+                self.setProject(url)
+            } else {
+                // Cancelled: restore the prior scope (or fall back to Global with no project)
+                // so we never strand in an empty Project scope or drop an existing project.
+                self.scopeMode = hadProject ? previousScope : .global
+                self.reload()
+            }
         }
     }
 
