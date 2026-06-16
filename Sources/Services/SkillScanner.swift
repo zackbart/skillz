@@ -52,12 +52,17 @@ enum SkillScanner {
         for (agent, agentDirs) in dirs {
             for dir in agentDirs {
                 guard let entries = try? fm.contentsOfDirectory(
-                    at: dir, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]
+                    at: dir, includingPropertiesForKeys: [.isSymbolicLinkKey], options: [.skipsHiddenFiles]
                 ) else { continue }
 
                 for entry in entries {
                     let skillMd = entry.appendingPathComponent("SKILL.md")
                     guard fm.fileExists(atPath: skillMd.path) else { continue }
+
+                    // Is this entry an actual symlink (→ canonical store), or a real directory
+                    // living in the agent's own dir? lstat via attributesOfItem (doesn't follow).
+                    let attrs = try? fm.attributesOfItem(atPath: entry.path)
+                    let isLink = (attrs?[.type] as? FileAttributeType) == .typeSymbolicLink
 
                     let canonical = entry.resolvingSymlinksInPath()
                     let key = canonical.path
@@ -65,6 +70,7 @@ enum SkillScanner {
 
                     if byCanonical[key] != nil {
                         byCanonical[key]?.wiredAgents.insert(agent)
+                        if isLink { byCanonical[key]?.symlinkedAgents.insert(agent) }
                         continue
                     }
 
@@ -92,6 +98,7 @@ enum SkillScanner {
                         provenance: prov
                     )
                     skill.isCLIManaged = (prov != nil)
+                    if isLink { skill.symlinkedAgents = [agent] }
                     skill.declaredAgents = declared[key] ?? []
                     byCanonical[key] = skill
                 }

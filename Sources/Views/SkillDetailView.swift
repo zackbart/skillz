@@ -64,12 +64,16 @@ struct SkillDetailView: View {
                 pill(loc, systemImage: "folder", color: .secondary)
             }
             pill(skill.gitStatus.label, systemImage: skill.gitStatus.systemImage, color: skill.gitStatus.color)
+                .help("Git status: \(skill.gitStatus.label)")
             if skill.linksDiverge {
                 pill("links diverge", systemImage: "arrow.triangle.branch", color: Theme.drift)
             }
-            pill(skill.isCLIManaged ? "CLI-managed" : "Manual",
+            pill(skill.isCLIManaged ? "skills.sh" : "Manual",
                  systemImage: skill.isCLIManaged ? "terminal" : "hand.raised",
                  color: .secondary)
+                .help(skill.isCLIManaged
+                      ? "Tracked in skills-lock.json (managed by the skills CLI)"
+                      : "Not in skills-lock.json — a manual/local skill")
 
             Spacer()
 
@@ -120,10 +124,13 @@ struct SkillDetailView: View {
                     chip("Canonical · .agents/skills", color: Agent.agents.color,
                          systemImage: "shippingbox.fill", filled: true)
                 }
-                // Claude Code is the only agent that needs its own wiring.
+                // Claude Code reaches it via its own dir — say honestly whether that's a
+                // symlink (→ canonical store) or real files living in .claude/skills.
                 if skill.access(.claude) == .wired {
-                    chip("Claude Code · symlinked", color: Agent.claude.color,
-                         systemImage: "link.circle.fill", filled: true)
+                    let local = skill.isLocalDir(.claude)
+                    chip("Claude Code · \(local ? "local files" : "symlinked")",
+                         color: Agent.claude.color,
+                         systemImage: local ? "folder.fill" : "link.circle.fill", filled: true)
                 }
                 ForEach(Array(skill.driftMissing).sorted { $0.rawValue < $1.rawValue }) { agent in
                     chip("\(agent.displayName) · declared", color: Theme.drift, systemImage: nil, ghost: true)

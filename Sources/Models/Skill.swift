@@ -32,8 +32,12 @@ struct Skill: AgentResource {
 
     var kind: ResourceKind { .skill }
 
-    /// Agents whose own dir references this skill on disk.
+    /// Agents whose own dir references this skill on disk (real dir OR symlink).
     var wiredAgents: Set<Agent>
+    /// Subset of `wiredAgents` whose reference is an actual SYMLINK (resolving elsewhere,
+    /// usually the canonical store). The complement live as real directories in the
+    /// agent's own dir — so the UI can say "symlinked" vs "local" honestly.
+    var symlinkedAgents: Set<Agent> = []
     /// Agents the skills CLI declares as targets (intent).
     var declaredAgents: Set<Agent> = []
 
@@ -80,6 +84,12 @@ struct Skill: AgentResource {
         if wiredAgents.contains(agent) { return .wired }
         if agent.readsCanonicalNatively && canonicalPresent { return .viaCanonical }
         return .none
+    }
+
+    /// True when `agent`'s reference is a real directory living in its own skills dir,
+    /// not a symlink to the canonical store (e.g. a hand-made project skill in `.claude/skills`).
+    func isLocalDir(_ agent: Agent) -> Bool {
+        wiredAgents.contains(agent) && !symlinkedAgents.contains(agent)
     }
 
     /// Agents the CLI declares but that genuinely can't reach the skill (drift).

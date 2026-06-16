@@ -208,10 +208,12 @@ struct SkillRow: View {
                         .foregroundStyle(Agent.agents.color)
                         .help("In .agents/skills — Codex, OpenCode & Pi read it directly")
                 }
-                // Claude Code is the only agent that needs its own symlink.
+                // Claude Code reaches it via its own dir (symlink or real local files).
                 if skill.access(.claude) == .wired {
                     Circle().fill(Agent.claude.color).frame(width: 7, height: 7)
-                        .help("Claude Code · symlinked")
+                        .help(skill.isLocalDir(.claude)
+                              ? "Claude Code · local files in .claude/skills"
+                              : "Claude Code · symlinked")
                 }
                 if skill.isCLIManaged {
                     Image(systemName: "terminal")
