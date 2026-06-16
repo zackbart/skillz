@@ -15,8 +15,16 @@ enum SkillScanner {
     }
 
     static func scanProject(root: URL) -> [Skill] {
+        // Bases to probe for agent skill dirs: ancestors (chosen dir → git root) plus
+        // descendants up to `maxDescentDepth` levels (monorepos nest .claude/.agents in
+        // subpackages). Dedupe by standardized path, preserving discovery order.
+        var bases = ancestorRoots(from: root)
+        bases.append(contentsOf: descendantRoots(from: root))
+        var seen = Set<String>()
+        let uniqueBases = bases.filter { seen.insert($0.standardizedFileURL.path).inserted }
+
         var dirs: [(Agent, [URL])] = []
-        for base in ancestorRoots(from: root) {
+        for base in uniqueBases {
             for agent in Agent.allCases {
                 dirs.append((agent, agent.projectSkillDirs.map { base.appendingPathComponent($0) }))
             }
@@ -124,6 +132,46 @@ enum SkillScanner {
     }
 
     // MARK: - Helpers
+
+    /// How many directory levels below the chosen root we look for nested agent dirs.
+    /// Depth 1 = `root/<pkg>/.claude/skills`, depth 3 = `root/a/b/c/.claude/skills`.
+    private static let maxDescentDepth = 3
+
+    /// Dirs we never traverse into — VCS, build output, and dependency trees that would
+    /// blow up the walk (and whose vendored skills aren't "the project's" anyway).
+    private static let pruneDirNames: Set<String> = [
+        ".git", "node_modules", ".build", "build", "dist", "out", ".next", ".nuxt",
+        "target", "vendor", "Pods", ".venv", "venv", "__pycache__", ".turbo",
+        "DerivedData", ".gradle", ".cache", "Carthage"
+    ]
+
+    /// Breadth-first walk from `root` (exclusive) down to `maxDescentDepth` levels,
+    /// returning every subdirectory that could host an agent skills dir. Skips hidden
+    /// dirs (incl. the agent dirs themselves — we probe those by name at each base),
+    /// symlinks (cycle-safe), and pruned build/dependency dirs.
+    private static func descendantRoots(from root: URL) -> [URL] {
+        let fm = FileManager.default
+        let keys: [URLResourceKey] = [.isDirectoryKey, .isSymbolicLinkKey]
+        var result: [URL] = []
+        var frontier: [(dir: URL, depth: Int)] = [(root.standardizedFileURL, 0)]
+
+        while !frontier.isEmpty {
+            let (dir, depth) = frontier.removeFirst()
+            if depth >= maxDescentDepth { continue }
+            guard let children = try? fm.contentsOfDirectory(
+                at: dir, includingPropertiesForKeys: keys, options: [.skipsHiddenFiles]
+            ) else { continue }
+
+            for child in children {
+                let vals = try? child.resourceValues(forKeys: Set(keys))
+                guard vals?.isDirectory == true, vals?.isSymbolicLink != true else { continue }
+                if pruneDirNames.contains(child.lastPathComponent) { continue }
+                result.append(child)
+                frontier.append((child, depth + 1))
+            }
+        }
+        return result
+    }
 
     /// Walk from `start` up to (and including) the git repo root; if not in a repo,
     /// just return `start`. Used so project skills in ancestor dirs are discovered.
