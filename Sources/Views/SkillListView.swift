@@ -10,21 +10,28 @@ struct SkillListView: View {
     }
 
     var body: some View {
-        List(state.filteredSkills, selection: $state.selection) { skill in
-            SkillRow(skill: skill)
-        }
-        .searchable(text: $state.searchText, placement: .toolbar, prompt: "Search skills")
-        .overlay {
-            if state.isLoading && state.skills.isEmpty {
-                ProgressView()
-            } else if state.filteredSkills.isEmpty {
-                ContentUnavailableView("No skills", systemImage: "tray",
-                    description: Text(emptyHint))
+        Group {
+            if state.kind == .mcp {
+                ContentUnavailableView("MCP — coming soon", systemImage: "puzzlepiece.extension",
+                    description: Text("MCP server discovery isn't available yet."))
+            } else {
+                List(state.filteredSkills, selection: $state.selection) { skill in
+                    SkillRow(skill: skill)
+                }
+                .searchable(text: $state.searchText, placement: .toolbar, prompt: "Search skills")
+                .overlay {
+                    if state.isLoading && state.skills.isEmpty {
+                        ProgressView()
+                    } else if state.filteredSkills.isEmpty {
+                        ContentUnavailableView("No skills", systemImage: "tray",
+                            description: Text(emptyHint))
+                    }
+                }
             }
         }
         .toolbar {
             // Fix-all-drift — only when there's drift; reflects in-progress status.
-            if state.driftCount > 0 {
+            if state.driftCount > 0 && state.kind == .skill {
                 ToolbarItem(placement: .automatic) {
                     Button {
                         state.fixAllDrift()
@@ -35,7 +42,8 @@ struct SkillListView: View {
                             Text("Fix all drift")
                         }
                     }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.glassProminent)
+                    .tint(Theme.drift)
                     .controlSize(.small)
                     .disabled(state.actionStatus.isRunning || state.isLoading)
                     .help("Wire every skill that's declared but not linked")
@@ -45,7 +53,9 @@ struct SkillListView: View {
                 Button { showInstall = true } label: {
                     Label("Install skill…", systemImage: "plus")
                 }
-                .disabled(needsProject)
+                .buttonStyle(.glassProminent)
+                .tint(Agent.claude.color)
+                .disabled(needsProject || state.kind == .mcp)
                 .help(needsProject ? "Choose a project first" : "Install a skill from a source")
             }
             ToolbarItem(placement: .primaryAction) {
@@ -142,7 +152,8 @@ struct InstallSheet: View {
                     state.install(ref: ref.trimmingCharacters(in: .whitespaces),
                                   skill: trimmedSkill.isEmpty ? nil : trimmedSkill)
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.glassProminent)
+                .tint(Agent.claude.color)
                 .keyboardShortcut(.defaultAction)
                 .disabled(ref.trimmingCharacters(in: .whitespaces).isEmpty
                           || !state.cliAvailable
@@ -201,12 +212,6 @@ struct SkillRow: View {
                 if skill.access(.claude) == .wired {
                     Circle().fill(Agent.claude.color).frame(width: 7, height: 7)
                         .help("Claude Code · symlinked")
-                }
-                // Unusual case: a skill installed directly into an agent dir, not canonical.
-                if !skill.canonicalPresent {
-                    ForEach(Agent.displayAgents.filter { skill.wiredAgents.contains($0) && $0 != .claude }) { a in
-                        Circle().fill(a.color).frame(width: 7, height: 7).help("\(a.displayName) · symlinked")
-                    }
                 }
                 if skill.isCLIManaged {
                     Image(systemName: "terminal")

@@ -3,15 +3,25 @@ import SwiftUI
 struct SidebarView: View {
     @EnvironmentObject var state: AppState
 
+    /// Native single-selection binding: nil (deselect) falls back to All.
+    private var selectionBinding: Binding<SidebarFilter?> {
+        Binding(
+            get: { state.sidebarFilter },
+            set: { state.sidebarFilter = $0 ?? .library(.all) }
+        )
+    }
+
     var body: some View {
-        List {
+        List(selection: selectionBinding) {
             // Kind switcher — Skills now, MCP reserved (DECISIONS D3).
-            HStack(spacing: 6) {
-                kindChip("Skills", active: true)
-                kindChip("MCP", active: false, soon: true)
+            Picker("Kind", selection: $state.kind) {
+                ForEach(ResourceKind.allCases, id: \.self) { Text($0.displayName).tag($0) }
             }
-            .listRowInsets(EdgeInsets(top: 4, leading: 6, bottom: 8, trailing: 6))
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .listRowInsets(EdgeInsets(top: 4, leading: 4, bottom: 8, trailing: 4))
             .listRowSeparator(.hidden)
+            .selectionDisabled()
 
             Section("Scope") {
                 Picker("Scope", selection: $state.scopeMode) {
@@ -20,7 +30,6 @@ struct SidebarView: View {
                 .pickerStyle(.segmented)
                 .labelsHidden()
                 .onChange(of: state.scopeMode) { _, mode in
-                    // Clear carried-over agent/source/lib/search/selection on a scope switch.
                     state.resetFilters()
                     if mode == .project && state.selectedProject == nil {
                         state.chooseProject()
@@ -44,99 +53,55 @@ struct SidebarView: View {
                     }
                 }
             }
+            .selectionDisabled()
 
             Section("Library") {
-                libRow(.all, "square.stack", state.skills.count)
-                libRow(.drift, "exclamationmark.triangle", state.driftCount)
-                libRow(.diverged, "arrow.triangle.branch", state.divergedCount)
+                row(.library(.all), "All", systemImage: "square.stack", count: state.skills.count)
+                row(.library(.drift), "Drift", systemImage: "exclamationmark.triangle",
+                    count: state.driftCount, iconTint: state.driftCount > 0 ? Theme.drift : nil)
+                row(.library(.diverged), "Diverged", systemImage: "arrow.triangle.branch",
+                    count: state.divergedCount)
             }
 
             Section("Agents") {
                 ForEach(Agent.sidebarAgents) { agent in
-                    selectRow(
-                        selected: state.selectedAgent == agent,
-                        toggle: { state.selectedAgent = state.selectedAgent == agent ? nil : agent }
-                    ) {
-                        Circle().fill(agent.color).frame(width: 9, height: 9)
-                        Text(agent.displayName)
-                        Spacer()
-                        countLabel(state.count(for: agent))
-                    }
+                    row(.agent(agent), agent.displayName, dot: agent.color, count: state.count(for: agent))
                 }
             }
 
             if !state.sources.isEmpty {
                 Section("Sources") {
                     ForEach(state.sources, id: \.name) { src in
-                        selectRow(
-                            selected: state.selectedSource == src.name,
-                            toggle: { state.selectedSource = state.selectedSource == src.name ? nil : src.name }
-                        ) {
-                            Image(systemName: "shippingbox").foregroundStyle(.secondary)
-                            Text(src.name).lineLimit(1).truncationMode(.middle)
-                            Spacer()
-                            countLabel(src.count)
-                        }
+                        row(.source(src.name), src.name, systemImage: "shippingbox",
+                            count: src.count, truncate: true)
                     }
                 }
             }
         }
         .listStyle(.sidebar)
+        .tint(Agent.claude.color) // Liquid Glass selection picks up the accent
     }
 
-    // MARK: - Pieces
+    // MARK: - Rows
 
-    private func kindChip(_ title: String, active: Bool, soon: Bool = false) -> some View {
-        HStack(spacing: 4) {
-            Text(title).fontWeight(.semibold)
-            if soon {
-                Text("SOON")
-                    .font(.system(size: 8, weight: .bold))
-                    .padding(.horizontal, 4).padding(.vertical, 1)
-                    .background(.quaternary, in: Capsule())
+    /// One selectable, tagged sidebar row. Native List selection renders the macOS
+    /// Liquid Glass highlight; we only supply the content + the `.tag` it selects.
+    @ViewBuilder
+    private func row(_ tag: SidebarFilter, _ title: String,
+                     systemImage: String? = nil, dot: Color? = nil,
+                     count: Int, iconTint: Color? = nil, truncate: Bool = false) -> some View {
+        HStack(spacing: 8) {
+            if let dot {
+                Circle().fill(dot).frame(width: 9, height: 9)
+            } else if let systemImage {
+                Image(systemName: systemImage).foregroundStyle(iconTint ?? .secondary)
             }
-        }
-        .font(.system(size: 12))
-        .frame(maxWidth: .infinity)
-        .padding(.vertical, 5)
-        .background(active ? Color(nsColor: .controlBackgroundColor) : .clear,
-                    in: RoundedRectangle(cornerRadius: 6))
-        .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(.quaternary))
-        .foregroundStyle(active ? .primary : .secondary)
-    }
-
-    @ViewBuilder
-    private func libRow(_ filter: LibraryFilter, _ icon: String, _ n: Int) -> some View {
-        selectRow(
-            selected: state.libraryFilter == filter,
-            // Re-clicking the active filter toggles back to .all (so it can be cleared).
-            toggle: { state.libraryFilter = (state.libraryFilter == filter ? .all : filter) }
-        ) {
-            Image(systemName: icon).foregroundStyle(filter == .drift && n > 0 ? Theme.drift : .secondary)
-            Text(filter.label)
+            Text(title)
+                .lineLimit(1)
+                .truncationMode(truncate ? .middle : .tail)
             Spacer()
-            // Fix-all lives in the list toolbar; no nested button here (a tap inside the
-            // row's own Button is ambiguous and would also toggle the filter).
-            countLabel(n)
+            Text("\(count)").font(.caption.monospaced()).foregroundStyle(.secondary)
         }
-    }
-
-    @ViewBuilder
-    private func selectRow<Content: View>(
-        selected: Bool,
-        toggle: @escaping () -> Void,
-        @ViewBuilder content: () -> Content
-    ) -> some View {
-        Button(action: toggle) {
-            HStack(spacing: 8) { content() }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .contentShape(Rectangle()) // make the whole row clickable, not just the text
-        }
-        .buttonStyle(.plain)
-        .listRowBackground(selected ? Theme.selection.opacity(0.12) : Color.clear)
-    }
-
-    private func countLabel(_ n: Int) -> some View {
-        Text("\(n)").font(.caption.monospaced()).foregroundStyle(.secondary)
+        .tag(tag)
     }
 }

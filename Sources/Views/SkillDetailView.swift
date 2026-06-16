@@ -83,7 +83,7 @@ struct SkillDetailView: View {
                         Label("Update", systemImage: "arrow.triangle.2.circlepath")
                     }
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(.glass)
                 .controlSize(.small)
                 .disabled(!state.cliAvailable || state.actionStatus.isRunning)
                 .help(state.cliAvailable ? "Update to the latest version of its source" : "Requires the skills CLI")
@@ -125,13 +125,6 @@ struct SkillDetailView: View {
                     chip("Claude Code · symlinked", color: Agent.claude.color,
                          systemImage: "link.circle.fill", filled: true)
                 }
-                // Unusual: direct (non-canonical) installs into an agent's own dir.
-                if !skill.canonicalPresent {
-                    ForEach(Agent.displayAgents.filter { skill.wiredAgents.contains($0) && $0 != .claude }) { a in
-                        chip("\(a.displayName) · symlinked", color: a.color,
-                             systemImage: "link.circle.fill", filled: true)
-                    }
-                }
                 ForEach(Array(skill.driftMissing).sorted { $0.rawValue < $1.rawValue }) { agent in
                     chip("\(agent.displayName) · declared", color: Theme.drift, systemImage: nil, ghost: true)
                 }
@@ -165,17 +158,16 @@ struct SkillDetailView: View {
                             Text("Wire into \(agent.displayName)")
                         }
                     }
-                    .buttonStyle(.borderedProminent)
+                    .buttonStyle(.glassProminent)
                     .controlSize(.small)
-                    .tint(Color(hex: 0xB8860B))
+                    .tint(Theme.drift)
                     .disabled(state.actionStatus.isRunning)
                 }
             }
         }
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(Theme.drift.opacity(0.08), in: RoundedRectangle(cornerRadius: 10))
-        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Theme.drift.opacity(0.3)))
+        .glassEffect(.regular.tint(Theme.drift.opacity(0.18)), in: .rect(cornerRadius: 12))
     }
 
     private func provenanceSection(_ p: SkillProvenance) -> some View {
@@ -208,7 +200,7 @@ struct SkillDetailView: View {
                 Button { state.openInEditor(skill) } label: {
                     Label("Edit", systemImage: "pencil").font(.caption)
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(.glass)
                 .controlSize(.small)
             }
             Text(skill.bodyMarkdown)

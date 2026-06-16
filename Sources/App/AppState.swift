@@ -58,6 +58,14 @@ enum ActionStatus: Equatable {
     }
 }
 
+/// The one active sidebar filter. Single-selection like a native macOS sidebar:
+/// choosing one clears the others. `.library(.all)` is the unfiltered default.
+enum SidebarFilter: Hashable {
+    case library(LibraryFilter)
+    case agent(Agent)
+    case source(String)
+}
+
 @MainActor
 final class AppState: ObservableObject {
     // Navigation / filters
@@ -65,10 +73,9 @@ final class AppState: ObservableObject {
     @Published var scopeMode: ScopeMode = .global
     @Published var selectedProject: URL?
     @Published var recentProjects: [URL] = []
-    // Filters that can hide the current selection — each reconciles the selection on change.
-    @Published var libraryFilter: LibraryFilter = .all { didSet { reconcileSelection() } }
-    @Published var selectedAgent: Agent? { didSet { reconcileSelection() } }
-    @Published var selectedSource: String? { didSet { reconcileSelection() } }
+    // Single-select sidebar filter (native macOS list selection). Reconciles the skill
+    // selection on change so the detail pane never shows a filtered-out skill.
+    @Published var sidebarFilter: SidebarFilter = .library(.all) { didSet { reconcileSelection() } }
 
     // Data
     @Published var skills: [Skill] = []
@@ -121,15 +128,13 @@ final class AppState: ObservableObject {
 
     var filteredSkills: [Skill] {
         var list = skills
-        switch libraryFilter {
-        case .all: break
-        case .drift: list = list.filter { !$0.driftMissing.isEmpty }
-        case .diverged: list = list.filter { $0.diverged }
-        }
-        if let agent = selectedAgent {
+        switch sidebarFilter {
+        case .library(.all): break
+        case .library(.drift): list = list.filter { !$0.driftMissing.isEmpty }
+        case .library(.diverged): list = list.filter { $0.diverged }
+        case .agent(let agent):
             list = list.filter { $0.availableAgents.contains(agent) || $0.declaredAgents.contains(agent) }
-        }
-        if let src = selectedSource {
+        case .source(let src):
             list = list.filter { $0.provenance?.source == src }
         }
         if !searchText.isEmpty {
@@ -162,9 +167,7 @@ final class AppState: ObservableObject {
     /// agent/source/lib/search state can't silently empty the list. Selection is set last
     /// so the net result is always `selection == nil` regardless of didSet ordering.
     func resetFilters() {
-        selectedAgent = nil
-        selectedSource = nil
-        libraryFilter = .all
+        sidebarFilter = .library(.all)
         searchText = ""
         selection = nil
     }
@@ -240,8 +243,10 @@ final class AppState: ObservableObject {
                 if let sel = self.selection, !scanned.contains(where: { $0.id == sel }) {
                     self.selection = nil
                 }
-                if let src = self.selectedSource, !self.sources.contains(where: { $0.name == src }) {
-                    self.selectedSource = nil
+                // If a source filter's source vanished from the scan, fall back to All.
+                if case .source(let src) = self.sidebarFilter,
+                   !self.sources.contains(where: { $0.name == src }) {
+                    self.sidebarFilter = .library(.all)
                 }
                 self.reconcileSelection()
                 self.updateWatcher()
