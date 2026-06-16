@@ -23,6 +23,14 @@ struct ContentView: View {
         }
         .safeAreaInset(edge: .bottom, spacing: 0) { StatusBar() }
         .task { if state.skills.isEmpty { state.reload() } }
+        // App-wide surfacing of any mutation failure (no longer swallowed by try?).
+        .alert("Action failed",
+               isPresented: Binding(get: { state.lastError != nil },
+                                    set: { if !$0 { state.lastError = nil } })) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(state.lastError ?? "")
+        }
     }
 }
 

@@ -4,6 +4,12 @@ struct SkillDetailView: View {
     let skill: Skill
     @EnvironmentObject var state: AppState
     @State private var wireTarget: Agent?
+    @State private var confirmRemove = false
+
+    /// This skill is a candidate for `skills update` only when CLI-managed and provenanced.
+    private var canUpdate: Bool {
+        skill.isCLIManaged && (skill.provenance?.source.isEmpty == false)
+    }
 
     var body: some View {
         ScrollView {
@@ -61,6 +67,44 @@ struct SkillDetailView: View {
             pill(skill.isCLIManaged ? "CLI-managed" : "Manual",
                  systemImage: skill.isCLIManaged ? "terminal" : "hand.raised",
                  color: .secondary)
+
+            Spacer()
+
+            if canUpdate {
+                Button {
+                    state.updateSkill(skill)
+                } label: {
+                    if state.actionStatus.isRunning {
+                        HStack(spacing: 5) { ProgressView().controlSize(.small); Text("Updating…") }
+                    } else {
+                        Label("Update", systemImage: "arrow.triangle.2.circlepath")
+                    }
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .disabled(!state.cliAvailable || state.actionStatus.isRunning)
+                .help(state.cliAvailable ? "Update to the latest version of its source" : "Requires the skills CLI")
+            }
+
+            Button(role: .destructive) {
+                confirmRemove = true
+            } label: {
+                Label("Remove…", systemImage: "trash")
+            }
+            .buttonStyle(.bordered)
+            .controlSize(.small)
+            .disabled(!state.cliAvailable || state.actionStatus.isRunning)
+            .help(state.cliAvailable ? "Uninstall this skill" : "Requires the skills CLI")
+            .confirmationDialog(
+                "Remove \(skill.name)?",
+                isPresented: $confirmRemove,
+                titleVisibility: .visible
+            ) {
+                Button("Remove \(skill.name)", role: .destructive) { state.removeSkill(skill) }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Uninstalls the skill via the skills CLI.")
+            }
         }
     }
 
@@ -106,10 +150,22 @@ struct SkillDetailView: View {
                 .foregroundStyle(Color(hex: 0x7A5800))
             HStack(spacing: 8) {
                 ForEach(Array(skill.driftMissing).sorted { $0.rawValue < $1.rawValue }) { agent in
-                    Button("Wire into \(agent.displayName)") { wireTarget = agent }
-                        .buttonStyle(.borderedProminent)
-                        .controlSize(.small)
-                        .tint(Color(hex: 0xB8860B))
+                    Button {
+                        wireTarget = agent
+                    } label: {
+                        if state.actionStatus.isRunning {
+                            HStack(spacing: 5) {
+                                ProgressView().controlSize(.small)
+                                Text("Wiring…")
+                            }
+                        } else {
+                            Text("Wire into \(agent.displayName)")
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    .tint(Color(hex: 0xB8860B))
+                    .disabled(state.actionStatus.isRunning)
                 }
             }
         }

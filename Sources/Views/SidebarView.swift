@@ -20,6 +20,8 @@ struct SidebarView: View {
                 .pickerStyle(.segmented)
                 .labelsHidden()
                 .onChange(of: state.scopeMode) { _, mode in
+                    // Clear carried-over agent/source/lib/search/selection on a scope switch.
+                    state.resetFilters()
                     if mode == .project && state.selectedProject == nil {
                         state.chooseProject()
                     } else {
@@ -107,11 +109,24 @@ struct SidebarView: View {
     private func libRow(_ filter: LibraryFilter, _ icon: String, _ n: Int) -> some View {
         selectRow(
             selected: state.libraryFilter == filter,
-            toggle: { state.libraryFilter = filter }
+            // Re-clicking the active filter toggles back to .all (so it can be cleared).
+            toggle: { state.libraryFilter = (state.libraryFilter == filter ? .all : filter) }
         ) {
             Image(systemName: icon).foregroundStyle(filter == .drift && n > 0 ? Theme.drift : .secondary)
             Text(filter.label)
             Spacer()
+            // Trailing fix-all affordance on the Drift row when there's drift to fix.
+            if filter == .drift && n > 0 {
+                Button {
+                    state.fixAllDrift()
+                } label: {
+                    Image(systemName: "wrench.and.screwdriver")
+                }
+                .buttonStyle(.borderless)
+                .controlSize(.small)
+                .disabled(state.actionStatus.isRunning || state.isLoading)
+                .help("Fix all drift")
+            }
             countLabel(n)
         }
     }

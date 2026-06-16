@@ -2,6 +2,12 @@ import SwiftUI
 
 struct SkillListView: View {
     @EnvironmentObject var state: AppState
+    @State private var showInstall = false
+
+    /// True when in Project scope but no project is chosen yet — install needs a target.
+    private var needsProject: Bool {
+        state.scopeMode == .project && state.selectedProject == nil
+    }
 
     var body: some View {
         List(state.filteredSkills, selection: $state.selection) { skill in
@@ -17,12 +23,44 @@ struct SkillListView: View {
             }
         }
         .toolbar {
+            // Fix-all-drift — only when there's drift; reflects in-progress status.
+            if state.driftCount > 0 {
+                ToolbarItem(placement: .automatic) {
+                    Button {
+                        state.fixAllDrift()
+                    } label: {
+                        if case .running(let label) = state.actionStatus {
+                            Text(label)
+                        } else {
+                            Text("Fix all drift")
+                        }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    .disabled(state.actionStatus.isRunning || state.isLoading)
+                    .help("Wire every skill that's declared but not linked")
+                }
+            }
+            ToolbarItem(placement: .primaryAction) {
+                Button { showInstall = true } label: {
+                    Label("Install skill…", systemImage: "plus")
+                }
+                .disabled(needsProject)
+                .help(needsProject ? "Choose a project first" : "Install a skill from a source")
+            }
+            ToolbarItem(placement: .primaryAction) {
+                // Small inline refresh spinner so a reload of an already-populated list shows progress.
+                if state.isLoading && !state.skills.isEmpty {
+                    ProgressView().controlSize(.small)
+                }
+            }
             ToolbarItem(placement: .primaryAction) {
                 Button { state.reload() } label: { Image(systemName: "arrow.clockwise") }
                     .help("Refresh (⌘R)")
                     .disabled(state.isLoading)
             }
         }
+        .sheet(isPresented: $showInstall) { InstallSheet() }
     }
 
     private var emptyHint: String {
@@ -30,6 +68,94 @@ struct SkillListView: View {
             return "Choose a project to scan its skills."
         }
         return "Nothing matches the current filters."
+    }
+}
+
+/// Install a skill (or whole package) from a source ref via the skills CLI.
+struct InstallSheet: View {
+    @EnvironmentObject var state: AppState
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var ref = ""
+    @State private var skillName = ""
+    /// Snapshot of the status owned by THIS install, so an overlapping mutation can't fool us.
+    @State private var didSubmit = false
+
+    private var scopeReadout: String {
+        if state.scopeMode == .project {
+            return "Project: \(state.selectedProject?.lastPathComponent ?? "—")"
+        }
+        return "Global"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Install skill").font(.title2).fontWeight(.semibold)
+
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Source").font(.caption).foregroundStyle(.secondary)
+                TextField("owner/repo or URL", text: $ref)
+                    .textFieldStyle(.roundedBorder)
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                Text("Skill name (optional)").font(.caption).foregroundStyle(.secondary)
+                TextField("install one named skill, or leave blank for all", text: $skillName)
+                    .textFieldStyle(.roundedBorder)
+            }
+
+            HStack(spacing: 6) {
+                Image(systemName: "scope").font(.caption2)
+                Text(scopeReadout).font(.caption).foregroundStyle(.secondary)
+            }
+
+            if !state.cliAvailable {
+                Label("Requires the skills CLI on PATH", systemImage: "exclamationmark.triangle")
+                    .font(.caption).foregroundStyle(Theme.drift)
+            }
+
+            // In-flight / failure feedback owned by this submission.
+            if didSubmit {
+                switch state.actionStatus {
+                case .running(let label):
+                    HStack(spacing: 8) {
+                        ProgressView().controlSize(.small)
+                        Text(label).font(.caption).foregroundStyle(.secondary)
+                    }
+                case .failure(let msg):
+                    Text(msg)
+                        .font(.caption)
+                        .foregroundStyle(Theme.drift)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(8)
+                        .background(Theme.drift.opacity(0.1), in: RoundedRectangle(cornerRadius: 6))
+                default:
+                    EmptyView()
+                }
+            }
+
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
+                Button("Install") {
+                    didSubmit = true
+                    state.install(ref: ref.trimmingCharacters(in: .whitespaces),
+                                  skill: skillName.isEmpty ? nil : skillName.trimmingCharacters(in: .whitespaces))
+                }
+                .buttonStyle(.borderedProminent)
+                .keyboardShortcut(.defaultAction)
+                .disabled(ref.trimmingCharacters(in: .whitespaces).isEmpty
+                          || !state.cliAvailable
+                          || state.actionStatus.isRunning)
+            }
+        }
+        .padding(20)
+        .frame(width: 420)
+        // Dismiss once this install succeeds.
+        .onChange(of: state.actionStatus) { _, status in
+            if didSubmit, case .success = status { dismiss() }
+        }
     }
 }
 

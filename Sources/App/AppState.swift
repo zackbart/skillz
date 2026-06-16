@@ -11,6 +11,16 @@ enum LibraryFilter: String, CaseIterable, Hashable {
     var label: String { rawValue.prefix(1).uppercased() + rawValue.dropFirst() }
 }
 
+/// Status of an in-flight mutation — drives spinners, inline confirmations and the alert.
+enum ActionStatus: Equatable {
+    case idle
+    case running(String)
+    case success(String)
+    case failure(String)
+
+    var isRunning: Bool { if case .running = self { return true }; return false }
+}
+
 @MainActor
 final class AppState: ObservableObject {
     // Navigation / filters
@@ -18,17 +28,23 @@ final class AppState: ObservableObject {
     @Published var scopeMode: ScopeMode = .global
     @Published var selectedProject: URL?
     @Published var recentProjects: [URL] = []
-    @Published var libraryFilter: LibraryFilter = .all
-    @Published var selectedAgent: Agent?
-    @Published var selectedSource: String?
+    // Filters that can hide the current selection — each reconciles the selection on change.
+    @Published var libraryFilter: LibraryFilter = .all { didSet { reconcileSelection() } }
+    @Published var selectedAgent: Agent? { didSet { reconcileSelection() } }
+    @Published var selectedSource: String? { didSet { reconcileSelection() } }
 
     // Data
     @Published var skills: [Skill] = []
     @Published var selection: Skill.ID?
-    @Published var searchText = ""
+    @Published var searchText = "" { didSet { reconcileSelection() } }
     @Published var isLoading = false
     @Published var cliAvailable = false
     @Published var gitAvailable = false
+
+    // Mutation surface
+    @Published var actionStatus: ActionStatus = .idle   // drives spinners / inline confirmations
+    @Published var lastError: String?                   // alert binding (non-nil ⇒ show alert)
+    @Published var pendingSelectName: String?           // name to select once it appears post-reload
 
     private var watcher: FileWatcher?
     private let recentsKey = "recentProjects"
@@ -44,8 +60,16 @@ final class AppState: ObservableObject {
     var driftCount: Int { skills.filter { !$0.driftMissing.isEmpty }.count }
     var divergedCount: Int { skills.filter { $0.diverged }.count }
 
+    /// Badge count — must use the SAME predicate as `filteredSkills`' agent clause
+    /// (available OR declared) so the sidebar number matches the produced list.
     func count(for agent: Agent) -> Int {
-        skills.filter { $0.availableAgents.contains(agent) }.count
+        skills.filter { $0.availableAgents.contains(agent) || $0.declaredAgents.contains(agent) }.count
+    }
+
+    /// UI scope → the `ResourceScope` the CLI wrappers expect.
+    var currentScope: ResourceScope {
+        if scopeMode == .project, let root = selectedProject { return .project(root: root.path) }
+        return .global
     }
 
     var sources: [(name: String, count: Int)] {
@@ -80,14 +104,37 @@ final class AppState: ObservableObject {
         return list
     }
 
+    /// Resolve against the VISIBLE list so the detail pane never shows a filtered-out skill.
     var selectedSkill: Skill? {
         guard let selection else { return nil }
-        return skills.first { $0.id == selection }
+        return filteredSkills.first { $0.id == selection }
+    }
+
+    // MARK: - Selection / filter coherence
+
+    /// Clear the selection if it's no longer in the visible list (called from filter didSets).
+    func reconcileSelection() {
+        if let sel = selection, !filteredSkills.contains(where: { $0.id == sel }) {
+            selection = nil
+        }
+    }
+
+    /// Reset all filters + selection. Called on scope/project change so carried-over
+    /// agent/source/lib/search state can't silently empty the list. Selection is set last
+    /// so the net result is always `selection == nil` regardless of didSet ordering.
+    func resetFilters() {
+        selectedAgent = nil
+        selectedSource = nil
+        libraryFilter = .all
+        searchText = ""
+        selection = nil
     }
 
     // MARK: - Project selection
 
     func chooseProject() {
+        let previousScope = scopeMode
+        let hadProject = selectedProject != nil
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.canChooseFiles = false
@@ -95,13 +142,16 @@ final class AppState: ObservableObject {
         panel.prompt = "Choose Project"
         if panel.runModal() == .OK, let url = panel.url {
             setProject(url)
-        } else if selectedProject == nil {
-            scopeMode = .global // cancelled with no project chosen → don't strand in empty Project scope
+        } else {
+            // Cancelled: restore the prior scope (or fall back to Global with no project)
+            // so we never strand in an empty Project scope or drop an existing project.
+            scopeMode = hadProject ? previousScope : .global
             reload()
         }
     }
 
     func setProject(_ url: URL) {
+        resetFilters()
         selectedProject = url
         scopeMode = .project
         recentProjects.removeAll { $0.path == url.path }
@@ -130,12 +180,18 @@ final class AppState: ObservableObject {
                 self.cliAvailable = cli
                 self.gitAvailable = git
                 self.isLoading = false
+                // Resolve a pending post-mutation selection by NAME (first canonical match).
+                if let nm = self.pendingSelectName {
+                    self.selection = scanned.first { $0.name == nm }?.id
+                    self.pendingSelectName = nil
+                }
                 if let sel = self.selection, !scanned.contains(where: { $0.id == sel }) {
                     self.selection = nil
                 }
                 if let src = self.selectedSource, !self.sources.contains(where: { $0.name == src }) {
                     self.selectedSource = nil
                 }
+                self.reconcileSelection()
                 self.updateWatcher()
             }
         }
@@ -157,30 +213,138 @@ final class AppState: ObservableObject {
 
     // MARK: - Mutations
 
+    /// Centralizes the off-main CLI run + status reporting. `work` runs detached; status
+    /// and reload land back on the main actor. `onSuccessSelect` re-selects a skill by
+    /// name once it (re)appears after the reload.
+    private func perform(_ label: String, onSuccessSelect: String? = nil, _ work: @escaping () -> CLIResult) {
+        actionStatus = .running(label)
+        lastError = nil
+        Task.detached(priority: .userInitiated) {
+            let r = work()
+            await MainActor.run {
+                if r.ok {
+                    self.actionStatus = .success(label)
+                    if let sel = onSuccessSelect { self.pendingSelectName = sel }
+                } else {
+                    self.actionStatus = .failure(r.message)
+                    self.lastError = r.message
+                }
+                self.reload()
+            }
+        }
+    }
+
+    /// INSTALL a package or specific skill from a source ref into chosen agents (CLI only).
+    func install(ref: String, skill: String? = nil, agents: [Agent] = [], copy: Bool = false) {
+        let scope = currentScope
+        let selectHint = skill ?? Self.lastPathComponent(of: ref)
+        perform("Installing", onSuccessSelect: selectHint) {
+            SkillsCLIService.add(ref: ref, skill: skill, agents: agents, scope: scope, copy: copy)
+        }
+    }
+
+    /// UPDATE an installed skill to the latest version of its source.
+    func updateSkill(_ skill: Skill) {
+        let scope = skill.scope
+        let name = skill.name
+        perform("Updating \(name)") { SkillsCLIService.update(name: name, scope: scope) }
+    }
+
+    /// REMOVE a skill fully, or unwire it from specific agents when `agents` is non-empty.
+    func removeSkill(_ skill: Skill, agents: [Agent] = []) {
+        let scope = skill.scope
+        let name = skill.name
+        let label = agents.isEmpty ? "Removing \(name)" : "Unwiring \(name)"
+        perform(label) { SkillsCLIService.remove(name: name, agents: agents, scope: scope) }
+    }
+
+    /// "owner/repo" → "repo" select hint for post-install reselection.
+    private static func lastPathComponent(of ref: String) -> String {
+        ref.split(separator: "/").last.map(String.init) ?? ref
+    }
+
     /// Wire a skill into an agent by creating the missing symlink to its canonical dir,
     /// mirroring `npx skills`: write the canonical files to `.agents/skills`, then a
     /// RELATIVE symlink (e.g. `../../.agents/skills/<name>`) in the agent's own dir.
     /// Only non-universal agents (Claude Code) ever need this; reversible.
+    ///
+    /// Uses the raw relative-symlink path (offline, correct for the single Claude-Code-
+    /// missing drift case) rather than the CLI — `skills add <localPath>` is built for
+    /// remote refs and may re-clone an already-canonical skill.
     func wire(_ skill: Skill, into agent: Agent) {
+        actionStatus = .running("Wiring \(agent.displayName)")
+        lastError = nil
+        Task.detached(priority: .userInitiated) {
+            let r = Self.rawSymlinkWire(skill, into: agent)
+            await MainActor.run {
+                if r.ok { self.actionStatus = .success("Wired \(agent.displayName)") }
+                else { self.actionStatus = .failure(r.message); self.lastError = r.message }
+                self.reload()
+            }
+        }
+    }
+
+    /// Batch-wire every skill that has missing-agent drift.
+    func fixAllDrift() {
+        let targets = skills.filter { !$0.driftMissing.isEmpty }
+        guard !targets.isEmpty else { return }
+        actionStatus = .running("Fixing drift")
+        lastError = nil
+        Task.detached(priority: .userInitiated) {
+            var failures = 0
+            var done = 0
+            for s in targets {
+                for agent in s.driftMissing {
+                    let r = Self.rawSymlinkWire(s, into: agent)
+                    if !r.ok { failures += 1 }
+                }
+                done += 1
+                let progress = done, total = targets.count
+                await MainActor.run { self.actionStatus = .running("Fixed \(progress) of \(total)") }
+            }
+            let failureCount = failures, total = targets.count
+            await MainActor.run {
+                self.actionStatus = failureCount == 0
+                    ? .success("Fixed drift on \(total) skills")
+                    : .failure("\(failureCount) failed")
+                if failureCount > 0 { self.lastError = "\(failureCount) skill(s) failed to wire." }
+                self.reload()
+            }
+        }
+    }
+
+    /// Create the relative agent-dir symlink for a skill. Returns a CLIResult-shaped
+    /// outcome (do/catch, NOT try?) so any FileManager failure surfaces to the UI.
+    /// `nonisolated` — touches only FileManager/strings, and is called off the main
+    /// actor from the detached tasks in wire()/fixAllDrift().
+    nonisolated static func rawSymlinkWire(_ skill: Skill, into agent: Agent) -> CLIResult {
         let dir: URL
         if skill.scope.isGlobal {
-            guard let g = agent.globalSkillDirs.first else { return }
+            guard let g = agent.globalSkillDirs.first else {
+                return CLIResult(exitCode: 1, stdout: "", stderr: "No global skills dir for \(agent.displayName).")
+            }
             dir = g
         } else if let root = skill.scope.projectRoot, let rel = agent.projectSkillDirs.first {
             dir = URL(fileURLWithPath: root).appendingPathComponent(rel)
-        } else { return }
+        } else {
+            return CLIResult(exitCode: 1, stdout: "", stderr: "No skills dir for \(agent.displayName).")
+        }
 
         let fm = FileManager.default
-        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
         let link = dir.appendingPathComponent(skill.name)
-        let relTarget = Self.relativePath(from: dir.path, to: skill.canonicalPath)
-        try? fm.removeItem(at: link) // clear a stale/broken link if present
-        try? fm.createSymbolicLink(atPath: link.path, withDestinationPath: relTarget)
-        reload()
+        let relTarget = relativePath(from: dir.path, to: skill.canonicalPath)
+        do {
+            try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+            try? fm.removeItem(at: link) // clear a stale/broken link if present
+            try fm.createSymbolicLink(atPath: link.path, withDestinationPath: relTarget)
+            return CLIResult(exitCode: 0, stdout: "Wired \(skill.name) → \(agent.displayName)", stderr: "")
+        } catch {
+            return CLIResult(exitCode: 1, stdout: "", stderr: error.localizedDescription)
+        }
     }
 
     /// Relative path from a directory to a target (so symlinks stay portable, like the CLI's).
-    private static func relativePath(from base: String, to target: String) -> String {
+    nonisolated private static func relativePath(from base: String, to target: String) -> String {
         let b = base.split(separator: "/").map(String.init)
         let t = target.split(separator: "/").map(String.init)
         var i = 0
