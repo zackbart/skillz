@@ -70,8 +70,9 @@ public enum EventSubscription: Sendable {
     }
 }
 
-/// Pushed-event names (underscored) received on the wire, e.g.
-/// `{"event":"pane_agent_status_changed","data":{…}}`.
+/// Canonical (underscored) internal form of pushed-event names. The wire may
+/// spell them dot-namespaced (`pane.agent_status_changed`) or underscored;
+/// `HerdrEvent.init` normalizes dots→underscores before matching against these.
 public enum EventName {
     public static let paneAgentStatusChanged = "pane_agent_status_changed"
 

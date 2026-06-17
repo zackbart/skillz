@@ -34,12 +34,28 @@ final class CodecTests: XCTestCase {
                        String(describing: HerdrEvent.agentStatus(pane: "w4:p1", status: .working)))
     }
 
-    /// A topology event (real wire sample) maps to `.topologyChanged`.
+    /// The real server is dot-namespaced (`pane.agent_status_changed`); the Mock
+    /// uses underscores. `HerdrEvent` normalizes dots→underscores, so the
+    /// dot-spelled pushed event must still map to `.agentStatus` — else live
+    /// status updates silently stop on a real host.
+    func testDecodeDotNamespacedStatusEvent() throws {
+        let line = Data(#"{"event":"pane.agent_status_changed","data":{"pane_id":"w4:p1","agent_status":"blocked"}}"#.utf8)
+        guard case .event(let event) = try IncomingMessage.decode(line: line) else {
+            return XCTFail("expected an event")
+        }
+        XCTAssertEqual(HerdrEvent(event).map(String.init(describing:)),
+                       String(describing: HerdrEvent.agentStatus(pane: "w4:p1", status: .blocked)))
+    }
+
+    /// A topology event maps to `.topologyChanged` — in both the Mock's
+    /// underscore form and the real server's dot form.
     func testDecodeTopologyEvent() throws {
-        let line = Data(#"{"event":"tab_closed","data":{"type":"tab_closed","tab_id":"w4:t2","workspace_id":"w4"}}"#.utf8)
-        guard case .event(let event) = try IncomingMessage.decode(line: line),
-              case .topologyChanged? = HerdrEvent(event) else {
-            return XCTFail("expected a topologyChanged event")
+        for name in ["tab_closed", "tab.closed"] {
+            let line = Data(#"{"event":"\#(name)","data":{"tab_id":"w4:t2","workspace_id":"w4"}}"#.utf8)
+            guard case .event(let event) = try IncomingMessage.decode(line: line),
+                  case .topologyChanged? = HerdrEvent(event) else {
+                return XCTFail("expected a topologyChanged event for \(name)")
+            }
         }
     }
 

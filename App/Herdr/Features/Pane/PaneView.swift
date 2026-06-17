@@ -21,10 +21,24 @@ enum PaneRenderMode: String, CaseIterable {
         case .reader: return "Reader"
         }
     }
+
+    var icon: String {
+        switch self {
+        case .fit: return "arrow.down.right.and.arrow.up.left"
+        case .scroll: return "arrow.left.and.right"
+        case .reader: return "text.alignleft"
+        }
+    }
+
+    /// Next mode in the cycle, for the single toggle button.
+    var next: PaneRenderMode {
+        let all = Self.allCases
+        return all[(all.firstIndex(of: self)! + 1) % all.count]
+    }
 }
 
 /// Screen 3: read a pane's output and send input, rendered as a light terminal.
-/// Output renders in one of three `PaneRenderMode`s (toggle under the header); an
+/// Output renders in one of three `PaneRenderMode`s (cycle button in the toolbar); an
 /// iSH-style key bar (sticky Ctrl, Esc, arrows) rides above the keyboard. Grid
 /// modes read `pane.read recent` (raw grid); reader reads `recent_unwrapped`.
 struct PaneView: View {
@@ -47,7 +61,6 @@ struct PaneView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            modeToggle
             content
             Rectangle()
                 .fill(Theme.terminalDim.opacity(0.18))
@@ -62,6 +75,7 @@ struct PaneView: View {
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
+                modeButton
                 if let pane, pane.isAgent {
                     StatusTag(status: pane.status)
                 }
@@ -94,14 +108,19 @@ struct PaneView: View {
     /// reads a different `pane.read` source.
     private var pollKey: String { "\(paneID.rawValue)|\(mode.rawValue)" }
 
-    private var modeToggle: some View {
-        Picker("Layout", selection: $mode) {
-            ForEach(PaneRenderMode.allCases, id: \.self) { Text($0.label).tag($0) }
+    /// Single toolbar button that cycles fit → scroll → reader, replacing the
+    /// space-hungry segmented control. Shows the current mode so the next tap is
+    /// predictable.
+    private var modeButton: some View {
+        Button { mode = mode.next } label: {
+            HStack(spacing: 4) {
+                Image(systemName: mode.icon)
+                Text(mode.label)
+            }
+            .font(Theme.mono(11, .semibold))
         }
-        .pickerStyle(.segmented)
-        .padding(.horizontal, 14)
-        .padding(.vertical, 8)
-        .background(Theme.terminalSurface)
+        .tint(Theme.prompt)
+        .accessibilityLabel("Layout: \(mode.label). Tap to change.")
     }
 
     @ViewBuilder private var content: some View {

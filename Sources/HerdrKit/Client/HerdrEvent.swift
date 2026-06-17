@@ -12,7 +12,12 @@ public enum HerdrEvent: Sendable {
     /// Translate a raw socket event, or `nil` if it isn't one we model. Event
     /// names are the underscored wire form (e.g. `pane_agent_status_changed`).
     init?(_ event: RPCEvent) {
-        switch event.method {
+        // Herdr's wire is dot-namespaced (`pane.agent_status_changed`), but the
+        // pushed-event name form isn't pinned down in the docs and the Mock uses
+        // underscores. Normalize dots→underscores so either form matches — else a
+        // real server pushing the dot form drops every status/topology event and
+        // the UI's status never updates live.
+        switch event.method.replacingOccurrences(of: ".", with: "_") {
         case EventName.paneAgentStatusChanged:
             guard let pane = event.params["pane_id"]?.stringValue else { return nil }
             let raw = event.params["agent_status"]?.stringValue ?? event.params["status"]?.stringValue
