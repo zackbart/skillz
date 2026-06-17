@@ -72,10 +72,11 @@ git push origin v0.0.1
 CI injects the version from the tag at build time, so the `project.yml` bump is just the human
 marker that makes the release commit self-describing. Release notes are auto-generated from commits.
 
-**One-time setup** (already done): six repo secrets hold the Apple credentials —
+**One-time setup** (already done): seven repo secrets. Six hold the Apple credentials —
 `BUILD_CERTIFICATE_BASE64`, `P12_PASSWORD`, `AC_API_KEY_BASE64`, `AC_API_KEY_ID`,
-`AC_API_ISSUER_ID`, `APPLE_TEAM_ID`. Regenerate them if the Developer ID cert (≈5 yr) or the
-App Store Connect API key is rotated. See `DECISIONS.md` (D6).
+`AC_API_ISSUER_ID`, `APPLE_TEAM_ID` (regenerate if the Developer ID cert (≈5 yr) or the App Store
+Connect API key is rotated). The seventh, `HOMEBREW_TAP_TOKEN`, lets the `update-tap` job push the
+cask to `zackbart/homebrew-tap` (non-expiring). See `DECISIONS.md` (D6).
 
 ## License
 
