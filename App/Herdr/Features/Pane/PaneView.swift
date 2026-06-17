@@ -44,26 +44,23 @@ struct PaneView: View {
             }
         }
         .sheet(isPresented: $showingRaw) { RawTerminalSheet(paneID: paneID) }
-        // Poll while the pane is open — the socket API pushes no pane-output
-        // events, so a gentle re-read is the only way to keep the transcript and
-        // status footer live. Re-keyed on `showingRaw` so opening the Raw sheet
-        // (which runs its own poll) pauses this one instead of double-reading the
-        // remote pane every tick. `.task` cancels on disappear / id change.
+        // Keep the pane live by re-reading whenever it emits new output. The
+        // socket API pushes no pane-output events, but `pane.wait_for_output`
+        // lets us block until the screen changes (or the wait times out) instead
+        // of polling on a fixed timer — instant on activity, quiet while idle.
+        // Re-keyed on `showingRaw` so opening the Raw sheet (which runs its own
+        // reader) pauses this loop. `.task` cancels on disappear / id change.
         .task(id: pollKey) {
             guard !showingRaw else { return }
             while !Task.isCancelled {
                 await session.refreshPaneDisplay(for: paneID, isAgent: pane?.isAgent == true)
-                try? await Task.sleep(for: pollInterval)
+                await session.awaitOutput(for: paneID)
             }
         }
     }
 
-    /// Restart the poll when the pane changes or the Raw sheet opens/closes.
+    /// Restart the loop when the pane changes or the Raw sheet opens/closes.
     private var pollKey: String { "\(paneID.rawValue)|\(showingRaw)" }
-
-    /// Poll fast while an agent is actively working; ease off otherwise so an
-    /// open-but-quiet pane isn't spawning a remote read every 2s on cellular.
-    private var pollInterval: Duration { pane?.status == .working ? .seconds(2) : .seconds(5) }
 
     /// Pinned, auto-refreshing projection of the agent's status footer (task,
     /// subagents, context, mode), cleaned of grid framing and color-preserved.

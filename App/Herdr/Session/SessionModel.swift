@@ -82,6 +82,18 @@ final class SessionModel {
         outputs[pane] = TerminalText.clean(deduped)
     }
 
+    /// Block until the pane produces new output (or the server's wait times out),
+    /// so the view can re-read the instant the screen changes instead of polling
+    /// on a fixed timer. Falls back to a short sleep if the wait itself fails, so
+    /// a transport error can't turn the caller's loop into a hot spin.
+    func awaitOutput(for pane: PaneID) async {
+        do {
+            _ = try await client.waitForOutput(pane)
+        } catch {
+            try? await Task.sleep(for: .seconds(3))
+        }
+    }
+
     /// The exact terminal grid for a pane, for the Raw inspector (uncleaned).
     func rawTerminal(for pane: PaneID) async -> [String] {
         (try? await client.readRawTerminal(pane)) ?? []

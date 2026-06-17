@@ -28,6 +28,16 @@ final class ClientTests: XCTestCase {
         XCTAssertTrue(lines.contains { $0.contains("Waiting for your confirmation") })
     }
 
+    /// The mock models an idle pane, so `waitForOutput` returns `false` on the
+    /// server's `timeout` error rather than throwing — the gate the live poll
+    /// loop relies on to keep looping instead of erroring out.
+    func testWaitForOutputReturnsFalseOnTimeout() async throws {
+        let client = HerdrClient(transport: MockTransport(tickInterval: .seconds(3600)))
+        try await client.connect()
+        let matched = try await client.waitForOutput("1-1", timeoutMS: 50)
+        XCTAssertFalse(matched, "an idle-pane timeout is a normal false, not a throw")
+    }
+
     /// Subscribing to a pane's status opens the persistent event channel and
     /// delivers that pane's status changes as typed `HerdrEvent`s.
     func testSubscribeDeliversStatusChangesForSubscribedPane() async throws {

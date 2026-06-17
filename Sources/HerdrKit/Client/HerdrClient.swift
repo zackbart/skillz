@@ -117,6 +117,34 @@ public actor HerdrClient {
         return split
     }
 
+    /// Block until the pane emits **new** output, or `timeoutMS` elapses. Returns
+    /// `true` if output arrived, `false` on a clean timeout. This is the
+    /// event-driven alternative to fixed-interval polling: it holds one channel
+    /// open and returns the instant the screen changes, staying quiet while idle.
+    ///
+    /// `match` is a regex that matches any single character (incl. newlines), so
+    /// any new output satisfies it — `pane.wait_for_output` is otherwise a
+    /// targeted wait (substring/regex). A timeout comes back as an RPC error with
+    /// code `timeout`, which we treat as a normal "nothing happened" result.
+    @discardableResult
+    public func waitForOutput(
+        _ pane: PaneID,
+        source: String = PaneReadSource.recentUnwrapped,
+        timeoutMS: Int = 15_000
+    ) async throws -> Bool {
+        do {
+            _ = try await call(Method.paneWaitForOutput, .object([
+                "pane_id": .string(pane.rawValue),
+                "source": .string(source),
+                "timeout_ms": .int(timeoutMS),
+                "match": .object(["type": .string("regex"), "value": .string("(?s:.)")]),
+            ]))
+            return true
+        } catch HerdrError.rpc(let error) where error.code == "timeout" {
+            return false
+        }
+    }
+
     /// Send literal text to a pane without a trailing newline.
     public func sendText(_ text: String, to pane: PaneID) async throws {
         _ = try await call(Method.paneSendText, .object([

@@ -26,7 +26,16 @@ public actor MockTransport: HerdrTransport {
     public func disconnect() async {}
 
     public func request(_ request: RPCRequest) async throws -> RPCResponse {
-        makeResponse(for: request)
+        if request.method == Method.paneWaitForOutput {
+            // The demo has static scrollback, so model an idle pane: wait briefly,
+            // then report the server's real idle response (a `timeout` error). The
+            // poll loop re-reads on its normal cadence; the live feel comes from
+            // the streamed agent-status events.
+            try? await Task.sleep(for: .seconds(2))
+            return RPCResponse(id: request.id, result: nil,
+                               error: RPCError(code: "timeout", message: "timed out waiting for output match"))
+        }
+        return makeResponse(for: request)
     }
 
     /// Persistent subscription: acks with `subscription_started`, then emits

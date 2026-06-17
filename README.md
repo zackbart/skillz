@@ -52,6 +52,10 @@ through the environment.
   tabs and their panes with per-agent status.
 - **Screen 3 — Pane** — `Features/Pane/PaneView.swift`: monospaced scrollback
   (ANSI-stripped, live-appended) and an input bar (text + Enter / quick keys).
+  The transcript re-reads whenever the pane emits new output: rather than poll on
+  a fixed timer, the loop blocks on `pane.wait_for_output` (matching any output)
+  and refreshes the instant the screen changes — instant on activity, quiet while
+  idle. Output gating only; agent status stays live via pushed events.
 
 ### Data flow
 

@@ -13,6 +13,7 @@ public enum Method {
     public static let agentList = "agent.list"
 
     public static let paneRead = "pane.read"
+    public static let paneWaitForOutput = "pane.wait_for_output"
     public static let paneSendText = "pane.send_text"
     public static let paneSendKeys = "pane.send_keys"
 
