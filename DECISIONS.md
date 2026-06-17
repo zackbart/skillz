@@ -107,5 +107,6 @@ Distribution is a notarized `.dmg` published to GitHub Releases (no App Store, n
   auto-bumps the cask's `version` + `sha256` after each release. It authenticates with a
   seventh secret, `HOMEBREW_TAP_TOKEN` (a non-expiring PAT with Contents:write on the tap,
   shared with seer's tap automation) — `GITHUB_TOKEN` can't push cross-repo. **Already set.**
-- **Deferred:** auto-update (Sparkle), `.dmg` background art, hand-curated `CHANGELOG.md`. Add when
-  there are users to update and notes worth curating.
+- **`CHANGELOG.md`** is hand-curated (Keep a Changelog) and bumped as part of each release-bump
+  merge. GitHub release notes are still auto-generated; the changelog is the human-readable record.
+- **Deferred:** auto-update (Sparkle), `.dmg` background art. Add when there are users to update.
