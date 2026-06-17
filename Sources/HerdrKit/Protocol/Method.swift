@@ -28,6 +28,13 @@ public enum PaneReadSource {
     public static let detection = "detection"
 }
 
+/// Valid `format` values for `pane.read`. `ansi` keeps SGR color/style escapes
+/// (pair with `strip_ansi: false`); `text` is plain.
+public enum PaneReadFormat {
+    public static let text = "text"
+    public static let ansi = "ansi"
+}
+
 /// Subscription `type` strings (dot-namespaced) sent inside
 /// `events.subscribe`'s `subscriptions` array.
 public enum SubscriptionType {

@@ -124,7 +124,7 @@ struct PaneView: View {
                             .foregroundStyle(Theme.terminalDim)
                     }
                     ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
-                        Text(line.ansiAttributed(defaultColor: Theme.terminalText))
+                        Text(line.ansiAttributed(defaultColor: Theme.terminalText, surface: Theme.terminalBG))
                             .font(Theme.monospaced)
                             .textSelection(.enabled)
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -163,7 +163,7 @@ struct PaneView: View {
                             // no per-row minimumScaleFactor (it would scale wide rows
                             // independently and break the grid). A pathologically wide
                             // line truncates rather than shrinking out of alignment.
-                            Text(line.ansiAttributed(defaultColor: Theme.terminalText))
+                            Text(line.ansiAttributed(defaultColor: Theme.terminalText, surface: Theme.terminalBG))
                                 .font(.system(size: size, design: .monospaced))
                                 .lineLimit(1)
                         }
@@ -183,10 +183,11 @@ struct PaneView: View {
     /// the faithful terminal view (what the agent's screen literally looks like).
     private var scrollGrid: some View {
         ScrollView([.vertical, .horizontal]) {
-            LazyVStack(alignment: .leading, spacing: 1) {
+            // spacing 0 so multi-row ANSI backgrounds tile without surface gaps.
+            LazyVStack(alignment: .leading, spacing: 0) {
                 gridPlaceholder
                 ForEach(Array(gridLines.enumerated()), id: \.offset) { _, line in
-                    Text(line.ansiAttributed(defaultColor: Theme.terminalText))
+                    Text(line.ansiAttributed(defaultColor: Theme.terminalText, surface: Theme.terminalBG))
                         .font(Theme.monospaced)
                         .textSelection(.enabled)
                         .lineLimit(1)
@@ -319,18 +320,22 @@ struct PaneView: View {
 }
 
 extension String {
-    /// Parse ANSI SGR color sequences (16-color, 256-color, and 24-bit truecolor
-    /// foreground) into an `AttributedString`, dropping every other escape
-    /// (cursor moves, erase, etc.). This restores the color structure an agent's
-    /// status footer relies on without a full terminal emulator — background
-    /// colors and text attributes (bold/italic) are intentionally ignored.
-    func ansiAttributed(defaultColor: Color) -> AttributedString {
+    /// Parse ANSI SGR sequences — fg/bg (16-color, 256-color, 24-bit truecolor),
+    /// inverse video, and dim — into an `AttributedString`, dropping every other
+    /// escape (cursor moves, erase, …). Renders both foreground and background so
+    /// filled/inverse regions (e.g. an agent's block-art logo) look right.
+    /// `defaultColor` is the fallback fg; `surface` is the terminal background,
+    /// used to resolve inverse video. Bold is not weight-rendered.
+    func ansiAttributed(defaultColor: Color, surface: Color) -> AttributedString {
         guard contains("\u{1B}") else {
             var plain = AttributedString(self)
             plain.foregroundColor = defaultColor
             return plain
         }
-        let pattern = "\u{1B}\\[([0-9;]*)([ -/]*[@-~])"
+        // Match the full CSI parameter range (`[0-?]`, incl. private `?`) so a
+        // non-SGR sequence like ESC[?25l is consumed, not rendered literally.
+        // Style is only applied when the final byte is `m` (see below).
+        let pattern = "\u{1B}\\[([0-?]*)([ -/]*[@-~])"
         guard let regex = try? NSRegularExpression(pattern: pattern) else {
             var plain = AttributedString(TerminalText.stripANSI(self))
             plain.foregroundColor = defaultColor
@@ -339,12 +344,14 @@ extension String {
         let ns = self as NSString
         var out = AttributedString()
         var cursor = 0
-        var color = defaultColor
+        var style = ANSIStyle()
 
         func appendText(_ s: String) {
             guard !s.isEmpty else { return }
             var seg = AttributedString(s)
-            seg.foregroundColor = color
+            let (fg, bg) = style.resolved(defaultFg: defaultColor, surface: surface)
+            seg.foregroundColor = fg
+            if let bg { seg.backgroundColor = bg }
             out.append(seg)
         }
 
@@ -354,17 +361,65 @@ extension String {
                 appendText(ns.substring(with: NSRange(location: cursor, length: match.range.location - cursor)))
             }
             cursor = match.range.location + match.range.length
-            // Only SGR ('m') affects color; other final bytes are consumed and dropped.
+            // Only SGR ('m') affects style; other final bytes are consumed and dropped.
             guard ns.substring(with: match.range(at: 2)) == "m" else { return }
-            color = ANSIColor.apply(ns.substring(with: match.range(at: 1)), to: color, default: defaultColor)
+            style.applySGR(ns.substring(with: match.range(at: 1)))
         }
         if cursor < ns.length { appendText(ns.substring(from: cursor)) }
         return out
     }
 }
 
-/// ANSI SGR foreground-color resolution, tuned to stay legible on the light
-/// terminal background.
+/// Mutable SGR style state accumulated while scanning a line: foreground,
+/// background, inverse, and dim. `nil` fg/bg mean "use the defaults".
+private struct ANSIStyle {
+    var fg: Color?
+    var bg: Color?
+    var inverse = false
+    var dim = false
+
+    /// Resolve to a concrete (foreground, optional background) for a run —
+    /// applying inverse (swap fg/bg, defaulting bg to the surface) and dim (fade).
+    func resolved(defaultFg: Color, surface: Color) -> (Color, Color?) {
+        var f = inverse ? (bg ?? surface) : (fg ?? defaultFg)
+        let b: Color? = inverse ? (fg ?? defaultFg) : bg
+        if dim { f = f.opacity(0.55) }
+        return (f, b)
+    }
+
+    mutating func applySGR(_ params: String) {
+        // Keep empty fields (`ESC[31;m` → 31 then an empty reset param == 0).
+        let codes = params.split(separator: ";", omittingEmptySubsequences: false).map { Int($0) ?? 0 }
+        if codes.isEmpty { self = ANSIStyle(); return } // bare ESC[m == reset
+        var i = 0
+        while i < codes.count {
+            let c = codes[i]
+            switch c {
+            case 0: self = ANSIStyle()
+            case 1: dim = false             // bold: not weight-rendered, but clears dim
+            case 2: dim = true
+            case 22: dim = false
+            case 7: inverse = true
+            case 27: inverse = false
+            case 30...37: fg = ANSIColor.palette[c - 30]
+            case 90...97: fg = ANSIColor.palette[8 + (c - 90)]
+            case 39: fg = nil
+            case 40...47: bg = ANSIColor.palette[c - 40]
+            case 100...107: bg = ANSIColor.palette[8 + (c - 100)]
+            case 49: bg = nil
+            // On a malformed/truncated 38/48 spec, consume the rest rather than
+            // letting a stray operand (e.g. the `2` in `ESC[38;2m`) act as an SGR.
+            case 38: if let (col, adv) = ANSIColor.extended(codes, i) { fg = col; i += adv } else { i = codes.count }
+            case 48: if let (col, adv) = ANSIColor.extended(codes, i) { bg = col; i += adv } else { i = codes.count }
+            default: break
+            }
+            i += 1
+        }
+    }
+}
+
+/// ANSI SGR color resolution, tuned to stay legible on the light terminal
+/// background.
 private enum ANSIColor {
     /// Standard + bright 16-color palette (indices 0–7 then 8–15), darkened where
     /// needed so light colors remain readable on a near-white surface.
@@ -387,33 +442,21 @@ private enum ANSIColor {
         Color(red: 0.20, green: 0.20, blue: 0.20), // bright white → near-black
     ]
 
-    /// Apply one SGR parameter list to the current color, returning the new one.
-    static func apply(_ params: String, to current: Color, default defaultColor: Color) -> Color {
-        let codes = params.split(separator: ";").map { Int($0) ?? 0 }
-        if codes.isEmpty { return defaultColor } // bare ESC[m == reset
-        var color = current
-        var i = 0
-        while i < codes.count {
-            let code = codes[i]
-            switch code {
-            case 0, 39: color = defaultColor
-            case 30...37: color = palette[code - 30]
-            case 90...97: color = palette[8 + (code - 90)]
-            case 38:
-                if i + 2 < codes.count, codes[i + 1] == 5 {
-                    color = from256(codes[i + 2]); i += 2
-                } else if i + 4 < codes.count, codes[i + 1] == 2 {
-                    color = Color(.sRGB,
-                                  red: Double(codes[i + 2]) / 255,
-                                  green: Double(codes[i + 3]) / 255,
-                                  blue: Double(codes[i + 4]) / 255)
-                    i += 4
-                }
-            default: break // ignore background (40–49) and attributes (1–9)
-            }
-            i += 1
+    /// Parse an extended-color spec (`38/48;5;n` or `38/48;2;r;g;b`) where `i` is
+    /// the `38`/`48` index. Returns the color and how many extra codes it consumed.
+    /// Truecolor is used verbatim (not palette-darkened) so e.g. a `0;0;0` logo
+    /// background renders truly black.
+    static func extended(_ codes: [Int], _ i: Int) -> (Color, Int)? {
+        if i + 2 < codes.count, codes[i + 1] == 5 {
+            let n = codes[i + 2]
+            return (0...255).contains(n) ? (from256(n), 2) : nil
+        } else if i + 4 < codes.count, codes[i + 1] == 2 {
+            return (Color(.sRGB,
+                          red: Double(codes[i + 2]) / 255,
+                          green: Double(codes[i + 3]) / 255,
+                          blue: Double(codes[i + 4]) / 255), 4)
         }
-        return color
+        return nil
     }
 
     /// xterm 256-color index → RGB (16 base + 6×6×6 cube + 24 grays).

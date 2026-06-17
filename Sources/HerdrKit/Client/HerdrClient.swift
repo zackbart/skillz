@@ -85,24 +85,33 @@ public actor HerdrClient {
     /// server's terminal-width soft-wrapping isn't baked in — the right source to
     /// re-wrap for a narrow screen). `TerminalText.clean` makes it mobile-ready.
     public func readPane(_ pane: PaneID, lines: Int = 200) async throws -> [String] {
-        try await readLines(pane, source: PaneReadSource.recentUnwrapped, lines: lines)
+        try await readLines(pane, source: PaneReadSource.recentUnwrapped, lines: lines,
+                            format: PaneReadFormat.ansi, stripAnsi: false)
     }
 
     /// Read the exact terminal grid (`recent`, hard-wrapped to the server width).
-    /// Backs the Fit/Scroll grid modes; the Reader mode uses `readPane`.
+    /// Backs the Fit/Scroll grid modes; the Reader mode uses `readPane`. ANSI is
+    /// kept so the UI can render fg/bg/inverse cells (e.g. an agent's logo).
     public func readRawTerminal(_ pane: PaneID, lines: Int = 500) async throws -> [String] {
-        try await readLines(pane, source: PaneReadSource.recent, lines: lines)
+        try await readLines(pane, source: PaneReadSource.recent, lines: lines,
+                            format: PaneReadFormat.ansi, stripAnsi: false)
     }
 
-    private func readLines(_ pane: PaneID, source: String, lines: Int?) async throws -> [String] {
+    private func readLines(_ pane: PaneID, source: String, lines: Int?,
+                           format: String? = nil, stripAnsi: Bool? = nil) async throws -> [String] {
         var params: [String: JSONValue] = [
             "pane_id": .string(pane.rawValue),
             "source": .string(source),
         ]
         if let lines { params["lines"] = .int(lines) }
+        if let format { params["format"] = .string(format) }
+        if let stripAnsi { params["strip_ansi"] = .bool(stripAnsi) }
         let result = try await call(Method.paneRead, .object(params))
         guard let text = try result.decodedSnake(PaneReadResult.self).read.text else { return [] }
         var split = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        // Grid rows arrive CRLF-terminated when ANSI isn't stripped — drop the CR
+        // so it doesn't leak into rendering or inflate the fit-mode width count.
+        for i in split.indices where split[i].hasSuffix("\r") { split[i].removeLast() }
         if split.last == "" { split.removeLast() } // drop the artifact of a trailing newline
         return split
     }
