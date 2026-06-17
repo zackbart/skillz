@@ -10,6 +10,14 @@ Stop digging through dotfiles to see what each agent is actually loaded with.
 > Clean-room, MIT-licensed. Informed by `RESEARCH.md` (verified ecosystem research) and
 > by Chops (`Shpigford/chops`) as a UX reference only — no code or assets are copied.
 
+## Install
+
+```bash
+brew install --cask zackbart/tap/loadout
+```
+
+Signed and notarized, so it opens with a normal double-click. Requires macOS 26+.
+
 ## What it does (v0.1)
 
 - Scans each agent's global skill directories plus the `~/.agents/skills` canonical store.

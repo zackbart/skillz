@@ -110,3 +110,27 @@ jobs:
             "${{ steps.dmg.outputs.path }}" \
             --title "Loadout ${{ steps.ver.outputs.version }}" \
             --generate-notes
+
+  # Bumps version + sha256 in the Homebrew cask after the release is published.
+  # Needs a PAT with Contents:write on zackbart/homebrew-tap, stored as the
+  # HOMEBREW_TAP_TOKEN secret (the default GITHUB_TOKEN can't push cross-repo).
+  update-tap:
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Bump Homebrew cask
+        env:
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          URL="https://github.com/zackbart/loadout/releases/download/v$VERSION/Loadout-$VERSION.dmg"
+          SHA=$(curl -fsSL "$URL" | sha256sum | awk '{print $1}')
+          git clone "https://x-access-token:${TAP_TOKEN}@github.com/zackbart/homebrew-tap.git" tap
+          cd tap
+          sed -i -E "s|^  version \".*\"|  version \"$VERSION\"|" Casks/loadout.rb
+          sed -i -E "s|^  sha256 \".*\"|  sha256 \"$SHA\"|"       Casks/loadout.rb
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Casks/loadout.rb
+          git diff --cached --quiet || git commit -m "loadout $VERSION"
+          git push

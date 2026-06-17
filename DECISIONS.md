@@ -102,5 +102,9 @@ Distribution is a notarized `.dmg` published to GitHub Releases (no App Store, n
   file), so nothing extra is needed.
 - Six repo secrets hold the credentials (`BUILD_CERTIFICATE_BASE64`, `P12_PASSWORD`,
   `AC_API_KEY_BASE64`, `AC_API_KEY_ID`, `AC_API_ISSUER_ID`, `APPLE_TEAM_ID`).
+- **Distribution is a Homebrew cask** in `zackbart/homebrew-tap` (`Casks/loadout.rb`) —
+  `brew install --cask zackbart/tap/loadout`. The release workflow's `update-tap` job
+  auto-bumps the cask's `version` + `sha256` after each release (needs `HOMEBREW_TAP_TOKEN`,
+  a PAT with Contents:write on the tap, since `GITHUB_TOKEN` can't push cross-repo).
 - **Deferred:** auto-update (Sparkle), `.dmg` background art, hand-curated `CHANGELOG.md`. Add when
   there are users to update and notes worth curating.
