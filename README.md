@@ -45,6 +45,30 @@ The Xcode project is generated — edit `project.yml`, not the `.xcodeproj`.
 - macOS 14+, Xcode 16+. Sole dependency: [Yams](https://github.com/jpsim/Yams) (via SPM).
 - Runs non-sandboxed to read agent dotfiles in your home directory.
 
+## Releasing
+
+Releases are **tag-driven, and tags are the *only* thing that runs CI** — there are no
+push/PR build triggers. Pushing a `v*` tag runs `.github/workflows/release.yml`, which builds,
+signs (Developer ID), notarizes, and publishes a notarized `.dmg` to GitHub Releases.
+
+**Tags are only cut from a release-bump merge — never off a random commit:**
+
+1. Open a "Release vX.Y.Z" PR that bumps `MARKETING_VERSION` in `project.yml`, and merge it to `main`.
+2. Tag that merge commit and push the tag:
+
+```bash
+git tag v0.0.1
+git push origin v0.0.1
+```
+
+CI injects the version from the tag at build time, so the `project.yml` bump is just the human
+marker that makes the release commit self-describing. Release notes are auto-generated from commits.
+
+**One-time setup** (already done): six repo secrets hold the Apple credentials —
+`BUILD_CERTIFICATE_BASE64`, `P12_PASSWORD`, `AC_API_KEY_BASE64`, `AC_API_KEY_ID`,
+`AC_API_ISSUER_ID`, `APPLE_TEAM_ID`. Regenerate them if the Developer ID cert (≈5 yr) or the
+App Store Connect API key is rotated. See `DECISIONS.md` (D6).
+
 ## License
 
 MIT — see [LICENSE](LICENSE).

@@ -82,3 +82,25 @@ Confirmed against each agent's own docs that 3 of 4 read the `.agents/skills` ca
 - For REMOTE installs (from a GitHub repo) prefer shelling out to `skills add` so the lock file + fetch are handled; for local "ensure wired everywhere" / drift-fix, do write+symlink directly.
 
 **App consequence:** with `readsCanonicalNatively` correct, drift for a canonical-present skill collapses to a single case — "Claude Code symlink missing" — so the drift-fix is one button ("Wire into Claude Code"), already built.
+
+## D6 — Releases: tag-driven, notarized Developer ID `.dmg` via GitHub Actions
+Distribution is a notarized `.dmg` published to GitHub Releases (no App Store, no Sparkle yet).
+- **The tag is the *only* CI trigger.** The workflow runs on `push: tags: ['v*']` and nothing
+  else — no `push`/`pull_request` triggers. Day-to-day commits, branches, and PRs never invoke it.
+  The build/sign/notarize pipeline only exists to cut a release.
+- **Tags are only pushed from a release-bump merge — never off an arbitrary commit.** The flow is:
+  open a small "Release vX.Y.Z" PR that bumps `MARKETING_VERSION` in `project.yml` (and records
+  notes if/when a `CHANGELOG.md` exists) → merge to `main` → tag *that* merge commit and push the
+  tag. So every tag points at a deliberate, reviewed release commit; you never tag mid-feature.
+  (CI still injects the version from the tag at build time; the `project.yml` bump is the human
+  marker that makes the merge self-describing.)
+- **Pipeline.** Push `vX.Y.Z` → `.github/workflows/release.yml` builds on `macos-26`,
+  signs with the **Developer ID Application** cert, notarizes (App Store Connect API key), staples,
+  and publishes the `.dmg` with auto-generated notes.
+- **Signing identity is "Cursor Kittens LLC"** (team `F2J8ZU2NQJ`) — that's what Gatekeeper shows.
+- Notarization-ready by construction: hardened runtime is on, app is non-sandboxed (no entitlements
+  file), so nothing extra is needed.
+- Six repo secrets hold the credentials (`BUILD_CERTIFICATE_BASE64`, `P12_PASSWORD`,
+  `AC_API_KEY_BASE64`, `AC_API_KEY_ID`, `AC_API_ISSUER_ID`, `APPLE_TEAM_ID`).
+- **Deferred:** auto-update (Sparkle), `.dmg` background art, hand-curated `CHANGELOG.md`. Add when
+  there are users to update and notes worth curating.
