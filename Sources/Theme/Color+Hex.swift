@@ -16,5 +16,4 @@ extension Color {
 /// Shared, non-agent color tokens (agent colors live on `Agent.color`).
 enum Theme {
     static let drift = Color(hex: 0xE5A50A)
-    static let selection = Color(hex: 0x3D63DD)
 }

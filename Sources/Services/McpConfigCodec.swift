@@ -59,8 +59,7 @@ enum McpConfigCodec {
         var out: [String: AgentMcpEntry] = [:]
         for (name, raw) in serverMap {
             guard let def = raw as? [String: Any] else {
-                out[name] = AgentMcpEntry(portable: nil, enabled: true, agentLocalFields: [],
-                                          unparsableReason: "entry is not a table/object")
+                out[name] = AgentMcpEntry(portable: nil, enabled: true, agentLocalFields: [])
                 continue
             }
             out[name] = normalize(def, harness: loc.harness, schema: schema)
@@ -108,18 +107,17 @@ enum McpConfigCodec {
                 kind: .remote, command: nil, args: [], env: [:], cwd: nil,
                 url: url, remoteTransport: remoteTransport(from: typeStr))
             return AgentMcpEntry(portable: portable, enabled: true,
-                                 agentLocalFields: agentLocal, unparsableReason: nil)
+                                 agentLocalFields: agentLocal)
         }
         guard let command = def["command"] as? String else {
-            return AgentMcpEntry(portable: nil, enabled: true, agentLocalFields: agentLocal,
-                                 unparsableReason: "no command or url")
+            return AgentMcpEntry(portable: nil, enabled: true, agentLocalFields: agentLocal)
         }
         let portable = PortableMcpDefinition(
             kind: .stdio, command: command, args: stringArray(def["args"]),
             env: envMap(def["env"], dialect: .dollar), cwd: def["cwd"] as? String,
             url: nil, remoteTransport: nil)
         return AgentMcpEntry(portable: portable, enabled: true,
-                             agentLocalFields: agentLocal, unparsableReason: nil)
+                             agentLocalFields: agentLocal)
     }
 
     /// Codex: stdio `command`/`args`/`env` (literal values), remote inferred from `url`
@@ -134,18 +132,17 @@ enum McpConfigCodec {
                 kind: .remote, command: nil, args: [], env: [:], cwd: nil,
                 url: url, remoteTransport: .streamableHttp)
             return AgentMcpEntry(portable: portable, enabled: enabled,
-                                 agentLocalFields: agentLocal, unparsableReason: nil)
+                                 agentLocalFields: agentLocal)
         }
         guard let command = def["command"] as? String else {
-            return AgentMcpEntry(portable: nil, enabled: enabled, agentLocalFields: agentLocal,
-                                 unparsableReason: "no command or url")
+            return AgentMcpEntry(portable: nil, enabled: enabled, agentLocalFields: agentLocal)
         }
         let portable = PortableMcpDefinition(
             kind: .stdio, command: command, args: stringArray(def["args"]),
             env: envMap(def["env"], dialect: .literal), cwd: def["cwd"] as? String,
             url: nil, remoteTransport: nil)
         return AgentMcpEntry(portable: portable, enabled: enabled,
-                             agentLocalFields: agentLocal, unparsableReason: nil)
+                             agentLocalFields: agentLocal)
     }
 
     /// opencode: `type:"local"` with `command:[cmd,...args]` (MERGED array) + `environment`
@@ -165,20 +162,19 @@ enum McpConfigCodec {
                 kind: .remote, command: nil, args: [], env: [:], cwd: nil,
                 url: def["url"] as? String, remoteTransport: .http)
             return AgentMcpEntry(portable: portable, enabled: enabled,
-                                 agentLocalFields: agentLocal, unparsableReason: nil)
+                                 agentLocalFields: agentLocal)
         }
         // local: command is a single array merging command + args.
         let merged = stringArray(def["command"])
         guard let command = merged.first else {
-            return AgentMcpEntry(portable: nil, enabled: enabled, agentLocalFields: agentLocal,
-                                 unparsableReason: "empty command array")
+            return AgentMcpEntry(portable: nil, enabled: enabled, agentLocalFields: agentLocal)
         }
         let portable = PortableMcpDefinition(
             kind: .stdio, command: command, args: Array(merged.dropFirst()),
             env: envMap(def["environment"], dialect: .opencode), cwd: def["cwd"] as? String,
             url: nil, remoteTransport: nil)
         return AgentMcpEntry(portable: portable, enabled: enabled,
-                             agentLocalFields: agentLocal, unparsableReason: nil)
+                             agentLocalFields: agentLocal)
     }
 
     // MARK: - Field helpers

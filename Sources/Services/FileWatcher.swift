@@ -42,11 +42,17 @@ final class FileWatcher {
         ) else { return }
 
         FSEventStreamSetDispatchQueue(stream, queue)
-        FSEventStreamStart(stream)
-        self.stream = stream
+        // Publish + start on `queue` so `stream`/`debounceItem` are only ever touched from
+        // the one thread the FSEvents callback and debounce also run on — no cross-thread race.
+        queue.sync {
+            self.stream = stream
+            FSEventStreamStart(stream)
+        }
     }
 
     private func schedule() {
+        // Runs on `queue` (the FSEvents callback thread) — same queue as start/stop, so the
+        // debounce item is single-threaded.
         debounceItem?.cancel()
         let item = DispatchWorkItem { [weak self] in
             guard let self else { return }
@@ -57,11 +63,18 @@ final class FileWatcher {
     }
 
     func stop() {
-        guard let stream else { return }
-        FSEventStreamStop(stream)
-        FSEventStreamInvalidate(stream)
-        FSEventStreamRelease(stream)
-        self.stream = nil
+        // Tear down on `queue`: serial execution guarantees no callback/debounce is mid-flight,
+        // cancelling stops a queued debounce from firing after teardown (a use-after-free if the
+        // watcher is then released), and confining the state here removes the cross-thread race.
+        queue.sync {
+            debounceItem?.cancel()
+            debounceItem = nil
+            guard let stream else { return }
+            FSEventStreamStop(stream)
+            FSEventStreamInvalidate(stream)
+            FSEventStreamRelease(stream)
+            self.stream = nil
+        }
     }
 
     deinit { stop() }

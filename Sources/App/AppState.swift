@@ -192,11 +192,7 @@ final class AppState: ObservableObject {
         }
         if !searchText.isEmpty {
             let q = searchText.lowercased()
-            list = list.filter {
-                $0.name.lowercased().contains(q)
-                    || ($0.summary?.lowercased().contains(q) ?? false)
-                    || $0.bodyMarkdown.lowercased().contains(q)
-            }
+            list = list.filter { $0.searchHaystack.contains(q) }
         }
         return list
     }
@@ -260,6 +256,10 @@ final class AppState: ObservableObject {
     /// (skill-only) can't survive into MCP mode, and `resetFilters` already clears it.
     private func switchedKind() {
         resetFilters()
+        // A pending post-mutation selection belongs to the axis it was set on; switching axes
+        // strands it (each reloader only reads its own), so clear both to avoid a stale re-select.
+        pendingSelectName = nil
+        pendingMcpSelectName = nil
         reload()
     }
 
@@ -374,8 +374,9 @@ final class AppState: ObservableObject {
             }
             // Always watch the canonical store; in project scope also watch every skill dir
             // the scan touched (incl. nested bases) so nested edits trigger a reload.
-            var watch = Agent.allCases.flatMap { $0.globalSkillDirs.map(\.path) }
-            if mode == .project, let project { watch += SkillScanner.projectSkillDirPaths(from: project) }
+            var built = Agent.allCases.flatMap { $0.globalSkillDirs.map(\.path) }
+            if mode == .project, let project { built += SkillScanner.projectSkillDirPaths(from: project) }
+            let watch = built
             let cli = SkillsCLIService.isAvailable
             let git = GitStatusService.isAvailable
             await MainActor.run {
@@ -695,11 +696,12 @@ final class AppState: ObservableObject {
         actionStatus = .running(id, label)
         lastError = nil
         Task.detached(priority: .userInitiated) {
-            var failures: [String] = []
+            var collected: [String] = []
             for (op, loc) in jobs {
-                do { _ = try McpWriteEngine.apply(op, at: loc) }
-                catch { failures.append("\(loc.harness.displayName): \(error)") }
+                do { try McpWriteEngine.apply(op, at: loc) }
+                catch { collected.append("\(loc.harness.displayName): \(error)") }
             }
+            let failures = collected
             await MainActor.run {
                 if failures.isEmpty {
                     self.actionStatus = .success(id, label)

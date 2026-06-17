@@ -18,7 +18,6 @@ enum JsonSurgeon {
     /// (key-start … value-end, excluding any trailing comma / surrounding whitespace).
     struct Member {
         let key: String
-        let keyRange: Range<Int>
         let valueRange: Range<Int>
         let memberRange: Range<Int>
     }
@@ -82,7 +81,7 @@ enum JsonSurgeon {
         var lo = lineStart(s, m.memberRange.lowerBound)
         var hi = m.memberRange.upperBound
         // trailing comma after the value?
-        var j = skipTrivia(s, hi)
+        let j = skipTrivia(s, hi)
         if j < s.count, s[j] == "," {
             hi = j + 1
             // consume to end of that line (incl. newline) so the line vanishes cleanly
@@ -110,7 +109,7 @@ enum JsonSurgeon {
         let keyJson = renderJsonString(key)
         if located.members.isEmpty {
             // Expand `{}` (in any inline form) into a two-line object.
-            let closeIndent = leadingIndent(s, located.braceOpen)
+            let closeIndent = leadingIndentString(s, located.braceOpen)
             let memberIndent = closeIndent + indentUnit
             let body = "{\n\(memberIndent)\(keyJson): \(valueText)\n\(closeIndent)}"
             return splice(s, located.braceOpen..<(located.braceClose + 1), with: body)
@@ -121,7 +120,7 @@ enum JsonSurgeon {
         // Insertion point: right after the last member's value (before any trailing comma).
         let insertAt = last.valueRange.upperBound
         // Is there already a trailing comma between last value and `}`?
-        var j = skipTrivia(s, insertAt)
+        let j = skipTrivia(s, insertAt)
         let hasTrailingComma = (j < s.count && s[j] == ",")
         let prefix = hasTrailingComma ? "" : ","
         let addition = "\(prefix)\n\(memberIndent)\(keyJson): \(valueText)"
@@ -147,8 +146,8 @@ enum JsonSurgeon {
             i = skipTrivia(s, i + 1)
             let valStart = i
             let valEnd = try scanValue(s, i)
-            members.append(Member(key: key, keyRange: keyStart..<keyEnd,
-                                  valueRange: valStart..<valEnd, memberRange: keyStart..<valEnd))
+            members.append(Member(key: key, valueRange: valStart..<valEnd,
+                                  memberRange: keyStart..<valEnd))
             i = skipTrivia(s, valEnd)
             if i < s.count, s[i] == "," { i += 1; continue }
             if i < s.count, s[i] == "}" { return Located(braceOpen: open, braceClose: i, members: members) }
@@ -236,10 +235,6 @@ enum JsonSurgeon {
         var j = start
         while j < i, s[j] == " " || s[j] == "\t" { view.append(s[j]); j += 1 }
         return String(view)
-    }
-
-    private static func leadingIndent(_ s: [Unicode.Scalar], _ i: Int) -> String {
-        leadingIndentString(s, i)
     }
 
     // MARK: - Splice + render

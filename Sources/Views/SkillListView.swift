@@ -15,14 +15,17 @@ struct SkillListView: View {
             if state.kind == .mcp {
                 McpListView()
             } else {
-                List(state.filteredSkills, selection: $state.selection) { skill in
+                // Compute the filtered list once per render — body re-evaluates on every
+                // @Published change and this branch reads it for both the List and the overlay.
+                let skills = state.filteredSkills
+                List(skills, selection: $state.selection) { skill in
                     SkillRow(skill: skill)
                 }
                 .searchable(text: $state.searchText, placement: .toolbar, prompt: "Search skills")
                 .overlay {
                     if state.isLoading && state.skills.isEmpty {
                         ProgressView()
-                    } else if state.filteredSkills.isEmpty {
+                    } else if skills.isEmpty {
                         ContentUnavailableView("No skills", systemImage: "tray",
                             description: Text(emptyHint))
                     }

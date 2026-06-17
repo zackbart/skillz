@@ -22,15 +22,6 @@ enum McpHarness: String, CaseIterable, Identifiable, Hashable {
         }
     }
 
-    var badge: String {
-        switch self {
-        case .claudeCode: return "CC"
-        case .opencode: return "OC"
-        case .codex: return "CX"
-        case .cursor: return "CU"
-        }
-    }
-
     /// Reuse the agent chroma where the harness IS one of the skill agents (so a server
     /// in Claude Code reads the same orange as a Claude skill); Cursor — which has no
     /// `Agent` — gets its own violet token, distinct from the four agent colors.

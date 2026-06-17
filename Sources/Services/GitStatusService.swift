@@ -54,6 +54,9 @@ enum GitStatusService {
             var relToAbs: [String: String] = [:]
             for abs in group {
                 let rel = relative(abs, to: root)
+                // If the path didn't reduce to repo-relative (symlink resolution escaped the
+                // root), don't hand git an absolute pathspec it can't match — report honestly.
+                if rel.hasPrefix("/") { result[abs] = .notInRepo; continue }
                 rels.append(rel)
                 relToAbs[rel] = abs
             }
@@ -156,7 +159,9 @@ enum GitStatusService {
         // against us reading stdout (writer fills its buffer, we fill ours, both block).
         if let inPipe, let stdin {
             DispatchQueue.global().async {
-                inPipe.fileHandleForWriting.write(stdin)
+                // `write(contentsOf:)` throws on a broken pipe (git closing stdin early); the
+                // older `write(_:)` traps and would crash the whole app instead.
+                try? inPipe.fileHandleForWriting.write(contentsOf: stdin)
                 try? inPipe.fileHandleForWriting.close()
             }
         }

@@ -23,8 +23,6 @@ enum McpWriteEngine {
         case remove(name: String)
     }
 
-    enum Outcome: Equatable { case wrote, unchanged }
-
     // MARK: - Pure patch (no disk) — also the unit-testable core
 
     /// Compute the new file text for `op` at `location`, given the file's current contents
@@ -59,8 +57,7 @@ enum McpWriteEngine {
 
     // MARK: - Disk apply (atomic, verified)
 
-    @discardableResult
-    static func apply(_ op: Op, at location: McpConfigLocation) throws -> Outcome {
+    static func apply(_ op: Op, at location: McpConfigLocation) throws {
         let fm = FileManager.default
         let path = location.url.path
         let existed = fm.fileExists(atPath: path)
@@ -72,8 +69,8 @@ enum McpWriteEngine {
         let newText = try patchedText(current: current, location: location, op: op)
 
         // Idempotent: nothing to write.
-        if newText == (current ?? "") { return .unchanged }
-        if !existed, case .remove = op { return .unchanged }
+        if newText == (current ?? "") { return }
+        if !existed, case .remove = op { return }
 
         // Verify the patched text parses (catch any writer bug BEFORE touching disk).
         try assertParses(newText, format: location.format)
@@ -95,7 +92,6 @@ enum McpWriteEngine {
             if let originalData { try? originalData.write(to: location.url) }
             throw WriteError(message: "post-write verification failed; restored \(location.url.lastPathComponent)")
         }
-        return .wrote
     }
 
     // MARK: - Atomic write

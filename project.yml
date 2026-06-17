@@ -28,3 +28,18 @@ targets:
         INFOPLIST_KEY_NSHumanReadableCopyright: "MIT Licensed"
         ENABLE_HARDENED_RUNTIME: YES
         CODE_SIGN_STYLE: Automatic
+    scheme:
+      testTargets:
+        - SkillzTests
+  SkillzTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: Tests
+    dependencies:
+      - target: Skillz
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.zackbart.skillzTests
+        SWIFT_VERSION: "5.0"
+        GENERATE_INFOPLIST_FILE: YES

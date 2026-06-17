@@ -181,7 +181,9 @@ enum TomlMiniReader {
                     // Line-ending backslash trims following whitespace; otherwise normal escape.
                     advance()
                     if let n = peek(), n == "\n" || n == "\r" || n == " " || n == "\t" {
-                        skipWhitespaceAndComments(newlines: true)
+                        // Trim whitespace/newlines ONLY — a `#` here is literal string content,
+                        // not a comment (skipWhitespaceAndComments would wrongly swallow it).
+                        while let w = peek(), w == " " || w == "\t" || w == "\n" || w == "\r" { advance() }
                         continue
                     }
                     out.unicodeScalars.append(try parseEscape())
@@ -259,11 +261,9 @@ enum TomlMiniReader {
             let t = tok.trimmingCharacters(in: .whitespaces)
             if t == "true" { return true }
             if t == "false" { return false }
-            let cleaned = t.replacingOccurrences(of: "_", with: "")
-            if let int = Int(cleaned) { return int }
-            if let dbl = Double(cleaned) { return dbl }
             if t.isEmpty { throw ParseError(message: "empty value") }
-            // Datetimes and anything else: keep the literal text (we don't need to interpret it).
+            // mcp_servers values are only string/bool/array/table — numbers and datetimes
+            // never need interpreting, so keep the literal text.
             return t
         }
 

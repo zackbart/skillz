@@ -30,6 +30,10 @@ struct Skill: AgentResource {
     var frontmatterKeys: [String]
     var rawFrontmatter: String
 
+    /// Lowercased name + summary + body, precomputed once at scan time so search filtering is
+    /// a single `contains` instead of re-lowercasing the full markdown body on every keystroke.
+    var searchHaystack = ""
+
     /// Top-level files/dirs packaged alongside SKILL.md in the canonical skill dir
     /// (reference docs, scripts, templates, assets). Excludes SKILL.md itself. Sorted
     /// dirs-first then by name; `isDirectory` lets the UI pick a folder vs file glyph.

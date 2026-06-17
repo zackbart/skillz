@@ -24,7 +24,7 @@ enum TomlMcpWriter {
             ? [] : source.components(separatedBy: "\n")
         let rendered = renderBlock(name: name, def: def, enabled: enabled)
 
-        if let block = findBlock(lines, name: name) {
+        if let block = try findBlock(lines, name: name) {
             let preserved = preservedLines(lines, block: block, name: name)
             let newBlock = ["[mcp_servers.\(tomlKeySegment(name))]"] + rendered + preserved
             lines.replaceSubrange(block, with: newBlock)
@@ -44,7 +44,7 @@ enum TomlMcpWriter {
     static func remove(source: String, name: String) throws -> String {
         try assertSafe(source)
         var lines = source.components(separatedBy: "\n")
-        guard let block = findBlock(lines, name: name) else { return source }
+        guard let block = try findBlock(lines, name: name) else { return source }
         // Also swallow a single trailing blank line so blocks don't accumulate gaps.
         var upper = block.upperBound
         if upper < lines.count, lines[upper].trimmingCharacters(in: .whitespaces).isEmpty { upper += 1 }
@@ -60,11 +60,11 @@ enum TomlMcpWriter {
             let t = raw.trimmingCharacters(in: .whitespaces)
             if t.isEmpty || t.hasPrefix("#") { continue }
             if t.hasPrefix("[") {
-                let (path, isArray) = parseHeader(t)
-                if path == "mcp_servers" {
+                let (segs, isArray) = headerSegments(t)
+                if segs == ["mcp_servers"] {
                     throw WriteError(message: "refusing to edit: a plain [mcp_servers] table is present — rewrite it as [mcp_servers.<name>] entries first")
                 }
-                if isArray, path.hasPrefix("mcp_servers") {
+                if isArray, segs.first == "mcp_servers" {
                     throw WriteError(message: "refusing to edit: mcp_servers uses an array-of-tables form this editor can't safely rewrite")
                 }
                 atRoot = false
@@ -82,23 +82,29 @@ enum TomlMcpWriter {
 
     // MARK: - Block location
 
-    /// The line range of `[mcp_servers.<name>]` and all of its subtables.
-    private static func findBlock(_ lines: [String], name: String) -> Range<Int>? {
-        let target = "mcp_servers.\(name)"
-        guard let start = lines.firstIndex(where: {
-            let t = $0.trimmingCharacters(in: .whitespaces)
+    /// The line range of `[mcp_servers.<name>]` and all of its subtables. Throws if the entry
+    /// is defined more than once — duplicate tables are invalid TOML, and editing only the
+    /// first would silently leave a stale second copy that slips past write verification.
+    private static func findBlock(_ lines: [String], name: String) throws -> Range<Int>? {
+        func isEntryHeader(_ line: String) -> Bool {
+            let t = line.trimmingCharacters(in: .whitespaces)
             guard t.hasPrefix("[") else { return false }
-            let (path, isArray) = parseHeader(t)
-            return !isArray && path == target
-        }) else { return nil }
+            let (segs, isArray) = headerSegments(t)
+            return !isArray && segs == ["mcp_servers", name]
+        }
+        let starts = lines.indices.filter { isEntryHeader(lines[$0]) }
+        guard let start = starts.first else { return nil }
+        if starts.count > 1 {
+            throw WriteError(message: "refusing to edit: \(starts.count) [mcp_servers.\(name)] tables present — remove the duplicate first")
+        }
 
         var end = start + 1
         while end < lines.count {
             let t = lines[end].trimmingCharacters(in: .whitespaces)
             if t.hasPrefix("[") {
-                let (path, _) = parseHeader(t)
-                // A subtable of this entry stays in the block; any other table ends it.
-                if path == target || path.hasPrefix(target + ".") { end += 1; continue }
+                let (segs, _) = headerSegments(t)
+                // A subtable of this entry (mcp_servers.<name>.*) stays in the block.
+                if segs.count >= 2, segs[0] == "mcp_servers", segs[1] == name { end += 1; continue }
                 break
             }
             end += 1
@@ -109,7 +115,6 @@ enum TomlMcpWriter {
     /// Lines inside the block to keep verbatim: comments, blank lines, unmanaged entry-level
     /// keys, and every subtable except `env` (which this writer re-renders inline).
     private static func preservedLines(_ lines: [String], block: Range<Int>, name: String) -> [String] {
-        let target = "mcp_servers.\(name)"
         var out: [String] = []
         var i = block.lowerBound + 1 // skip the header itself
         while i < block.upperBound {
@@ -118,9 +123,9 @@ enum TomlMcpWriter {
             if t.hasPrefix("[") {
                 // a subtable group: header + body until next header / block end
                 let subStart = i
-                let (path, _) = parseHeader(t)
-                let sub = String(path.dropFirst(min(path.count, (target + ".").count)))
-                let subKey = sub.split(separator: ".").first.map(String.init) ?? sub
+                let (segs, _) = headerSegments(t)
+                // segs = [mcp_servers, <name>, <subKey>, …]; the first subtable key decides.
+                let subKey = segs.count >= 3 ? segs[2] : ""
                 i += 1
                 while i < block.upperBound, !lines[i].trimmingCharacters(in: .whitespaces).hasPrefix("[") { i += 1 }
                 if subKey != "env" {
@@ -213,14 +218,88 @@ enum TomlMcpWriter {
 
     // MARK: - Parsing helpers
 
-    /// `[a.b.c]` / `[[a.b]]` → (path, isArray). Stops at the first `]`, ignoring comments.
-    private static func parseHeader(_ t: String) -> (path: String, isArray: Bool) {
+    /// `[a."b.c".d]` / `[[a.b]]` → (unquoted dotted segments, isArray). Quoted segments are
+    /// unquoted so a name like `my.server` (written as `[mcp_servers."my.server"]`) compares
+    /// equal to the raw `name` the codec carries — otherwise insert/find/remove disagree and
+    /// the writer appends duplicate blocks. Stops at the first top-level `]`.
+    private static func headerSegments(_ t: String) -> (segments: [String], isArray: Bool) {
         var s = Substring(t)
         var isArray = false
         if s.hasPrefix("[[") { isArray = true; s = s.dropFirst(2) }
         else if s.hasPrefix("[") { s = s.dropFirst(1) }
-        if let close = s.firstIndex(of: "]") { s = s[s.startIndex..<close] }
-        return (s.trimmingCharacters(in: .whitespaces), isArray)
+        // The header ends at the first `]` that's NOT inside a quoted segment.
+        var inBasic = false, inLiteral = false, prevBackslash = false
+        var end = s.endIndex
+        var k = s.startIndex
+        while k < s.endIndex {
+            let ch = s[k]
+            if inBasic {
+                if ch == "\"" && !prevBackslash { inBasic = false }
+                prevBackslash = (ch == "\\" && !prevBackslash)
+            } else if inLiteral {
+                if ch == "'" { inLiteral = false }
+            } else if ch == "\"" { inBasic = true; prevBackslash = false }
+            else if ch == "'" { inLiteral = true }
+            else if ch == "]" { end = k; break }
+            k = s.index(after: k)
+        }
+        return (splitDottedKey(String(s[s.startIndex..<end])), isArray)
+    }
+
+    /// Split a dotted key path on top-level `.`, unquoting each segment.
+    private static func splitDottedKey(_ s: String) -> [String] {
+        var segments: [String] = []
+        var cur = ""
+        var inBasic = false, inLiteral = false, prevBackslash = false
+        func flush() {
+            segments.append(unquoteSegment(cur.trimmingCharacters(in: .whitespaces)))
+            cur = ""
+        }
+        for ch in s {
+            if inBasic {
+                cur.append(ch)
+                if ch == "\"" && !prevBackslash { inBasic = false }
+                prevBackslash = (ch == "\\" && !prevBackslash)
+            } else if inLiteral {
+                cur.append(ch)
+                if ch == "'" { inLiteral = false }
+            } else if ch == "\"" { inBasic = true; prevBackslash = false; cur.append(ch) }
+            else if ch == "'" { inLiteral = true; cur.append(ch) }
+            else if ch == "." { flush() }
+            else { cur.append(ch) }
+        }
+        flush()
+        return segments
+    }
+
+    /// Strip basic/literal quotes from a single key segment (literal verbatim; basic decodes
+    /// the escapes `tomlString` emits). A bare segment passes through unchanged.
+    private static func unquoteSegment(_ seg: String) -> String {
+        if seg.count >= 2, seg.hasPrefix("\""), seg.hasSuffix("\"") {
+            return decodeBasicEscapes(String(seg.dropFirst().dropLast()))
+        }
+        if seg.count >= 2, seg.hasPrefix("'"), seg.hasSuffix("'") {
+            return String(seg.dropFirst().dropLast())
+        }
+        return seg
+    }
+
+    private static func decodeBasicEscapes(_ s: String) -> String {
+        var out = ""
+        var esc = false
+        for ch in s {
+            if esc {
+                switch ch {
+                case "n": out.append("\n")
+                case "t": out.append("\t")
+                case "r": out.append("\r")
+                default: out.append(ch) // \" \\ and anything else → literal char
+                }
+                esc = false
+            } else if ch == "\\" { esc = true }
+            else { out.append(ch) }
+        }
+        return out
     }
 
     private static func keyName(_ line: String) -> String {

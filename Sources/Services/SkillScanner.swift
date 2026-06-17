@@ -93,6 +93,8 @@ enum SkillScanner {
                     if isLink { skill.symlinkedAgents = [agent] }
                     skill.declaredAgents = declared[key] ?? []
                     skill.bundledFiles = bundledFiles(in: canonical, fm: fm)
+                    skill.searchHaystack =
+                        (name + " " + (skill.summary ?? "") + " " + parsed.body).lowercased()
                     byCanonical[key] = skill
                 }
             }

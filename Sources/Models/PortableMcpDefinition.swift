@@ -101,9 +101,9 @@ struct PortableMcpDefinition: Hashable {
 }
 
 /// One harness's view of a single server: its parsed portable definition (nil when the raw
-/// entry couldn't be normalized), whether it's enabled, why it might be unsupported, and the
-/// NAMES of any agent-local / secret-bearing fields present (so the writer knows to preserve
-/// them and the UI can say "carries auth" without ever surfacing the secret).
+/// entry couldn't be normalized), whether it's enabled, and the NAMES of any agent-local /
+/// secret-bearing fields present (so the writer knows to preserve them and the UI can say
+/// "carries auth" without ever surfacing the secret).
 struct AgentMcpEntry: Hashable {
     var portable: PortableMcpDefinition?
     var enabled: Bool
@@ -111,6 +111,4 @@ struct AgentMcpEntry: Hashable {
     /// headersHelper, bearer_token_env_var, http_headers, env_http_headers, Cursor `auth`,
     /// `envFile`, …). Key names only — never values.
     var agentLocalFields: [String]
-    /// Set when the raw entry was present but couldn't be parsed into a portable definition.
-    var unparsableReason: String?
 }

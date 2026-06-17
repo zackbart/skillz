@@ -3,7 +3,7 @@ import SwiftUI
 /// The coding agents Skillz understands, plus the skills.sh canonical store.
 /// Paths are verified ground truth (see RESEARCH.md). `agents` is the
 /// `~/.agents/skills` canonical store that skills.sh symlinks every agent back into.
-enum Agent: String, CaseIterable, Identifiable, Hashable, Codable {
+enum Agent: String, CaseIterable, Identifiable, Hashable {
     case claude
     case opencode
     case codex
@@ -11,9 +11,6 @@ enum Agent: String, CaseIterable, Identifiable, Hashable, Codable {
     case agents // the ~/.agents/skills canonical store
 
     var id: String { rawValue }
-
-    /// The real agents shown as badges/columns (the canonical store is not an agent runtime).
-    static let displayAgents: [Agent] = [.claude, .opencode, .codex, .pi]
 
     /// Agents worth their own sidebar filter row. OpenCode, Codex and Pi read the canonical
     /// store natively, so their counts always equal Canonical's — listing them is redundant.
@@ -27,16 +24,6 @@ enum Agent: String, CaseIterable, Identifiable, Hashable, Codable {
         case .codex: return "Codex"
         case .pi: return "Pi"
         case .agents: return "Canonical"
-        }
-    }
-
-    var badge: String {
-        switch self {
-        case .claude: return "CC"
-        case .opencode: return "OC"
-        case .codex: return "CX"
-        case .pi: return "PI"
-        case .agents: return "·"
         }
     }
 
