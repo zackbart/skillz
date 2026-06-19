@@ -23,12 +23,41 @@ struct SidebarView: View {
             .listRowSeparator(.hidden)
             .selectionDisabled()
 
+            Section("Machine") {
+                machineRow("Local", systemImage: "desktopcomputer", active: !state.isRemote) {
+                    state.selectLocal()
+                }
+                ForEach(state.savedHosts, id: \.self) { target in
+                    machineRow(target, systemImage: "server.rack",
+                               active: state.selectedHostTarget == target) {
+                        state.selectHost(target)
+                    }
+                    .contextMenu {
+                        Button(role: .destructive) { state.removeHost(target) } label: {
+                            Label("Remove host", systemImage: "trash")
+                        }
+                    }
+                }
+                Button { state.newHostInput = ""; state.showAddHost = true } label: {
+                    Label("Add remote host…", systemImage: "plus")
+                }
+                .help("Scan a machine over SSH (user@host or an ~/.ssh/config alias)")
+                if state.isRemote {
+                    Button { state.reload() } label: {
+                        Label("Refresh", systemImage: "arrow.clockwise")
+                    }
+                    .help("Re-scan the remote machine (remote scopes don't live-update)")
+                }
+            }
+            .selectionDisabled()
+
             Section("Scope") {
                 Picker("Scope", selection: $state.scopeMode) {
                     ForEach(ScopeMode.allCases, id: \.self) { Text($0.label).tag($0) }
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
+                .disabled(state.isRemote) // remote is global-only (D7)
                 .onChange(of: state.scopeMode) { _, mode in
                     state.resetFilters()
                     if mode == .project {
@@ -98,6 +127,67 @@ struct SidebarView: View {
         }
         .listStyle(.sidebar)
         .tint(Agent.claude.color) // Liquid Glass selection picks up the accent
+        .alert("Add remote host", isPresented: $state.showAddHost) {
+            TextField("user@host or ssh alias", text: $state.newHostInput)
+            Button("Add") { state.addRemoteHost(state.newHostInput) }
+            Button("Cancel", role: .cancel) { }
+        } message: {
+            Text("Scan this machine's skills over SSH. Tries your ssh keys first; if none work you'll be asked for a password. Read-only.")
+        }
+        .sheet(isPresented: Binding(
+            get: { state.passwordPromptTarget != nil },
+            set: { if !$0 { state.cancelPassword() } }
+        )) {
+            passwordPrompt
+        }
+    }
+
+    /// Secure password prompt shown when key auth is refused. The password is kept only in
+    /// memory for the session (never stored), so it's re-asked after relaunch.
+    private var passwordPrompt: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Password for \(state.passwordPromptTarget ?? "")")
+                .font(.headline)
+            Text("No SSH key worked for this host. Enter a password to scan it (read-only). Kept only for this session.")
+                .font(.callout).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            SecureField("Password", text: $state.passwordInput)
+                .textFieldStyle(.roundedBorder)
+                .onSubmit { state.submitPassword() }
+            HStack {
+                Spacer()
+                Button("Cancel", role: .cancel) { state.cancelPassword() }
+                Button("Connect") { state.submitPassword() }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(state.passwordInput.isEmpty)
+            }
+        }
+        .padding(20)
+        .frame(width: 380)
+    }
+
+    /// A machine row (Local or a saved remote): switch on click, check the active one.
+    @ViewBuilder
+    private func machineRow(_ title: String, systemImage: String,
+                            active: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Image(systemName: systemImage)
+                    .foregroundStyle(active ? Agent.claude.color : .secondary)
+                Text(title)
+                    .fontWeight(active ? .semibold : .regular)
+                    .lineLimit(1).truncationMode(.middle)
+                Spacer()
+                if active {
+                    Image(systemName: "checkmark")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(Agent.claude.color)
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .help(title)
     }
 
     /// A saved-project row: switch on click, mark the active one, remove via context menu.

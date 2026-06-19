@@ -39,7 +39,10 @@ struct McpServer: AgentResource {
     /// "↑ <dir>" = an ancestor above it; empty for global scope. Part of identity.
     var logicalLocation: String
 
-    var id: String { "\(scope.projectRoot ?? "global")::\(logicalLocation)::\(name)" }
+    /// Which machine this server was discovered on. McpScanner isn't threaded yet, so this
+    /// stays `.local` everywhere; local renders `idTag == nil` → id unchanged (see D7).
+    var host: Host = .local
+    var id: String { "\(host.idTag.map { $0 + "::" } ?? "")\(scope.projectRoot ?? "global")::\(logicalLocation)::\(name)" }
     var kind: ResourceKind { .mcp }
 
     /// Per-harness parsed entry, only for harnesses where the server is actually present.

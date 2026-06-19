@@ -83,7 +83,7 @@ struct SkillDetailView: View {
 
             Spacer()
 
-            if canUpdate {
+            if !state.isRemote && canUpdate {
                 Button {
                     state.updateSkill(skill)
                 } label: {
@@ -99,24 +99,26 @@ struct SkillDetailView: View {
                 .help(state.cliAvailable ? "Update to the latest version of its source" : "Requires the skills CLI")
             }
 
-            Button(role: .destructive) {
-                confirmRemove = true
-            } label: {
-                Label("Remove…", systemImage: "trash")
-            }
-            .buttonStyle(.bordered)
-            .controlSize(.small)
-            .disabled(!state.cliAvailable || state.actionStatus.isRunning)
-            .help(state.cliAvailable ? "Uninstall this skill" : "Requires the skills CLI")
-            .confirmationDialog(
-                "Remove \(skill.name)?",
-                isPresented: $confirmRemove,
-                titleVisibility: .visible
-            ) {
-                Button("Remove \(skill.name)", role: .destructive) { state.removeSkill(skill) }
-                Button("Cancel", role: .cancel) {}
-            } message: {
-                Text("Uninstalls the skill via the skills CLI.")
+            if !state.isRemote { // remote scopes are read-only (D7)
+                Button(role: .destructive) {
+                    confirmRemove = true
+                } label: {
+                    Label("Remove…", systemImage: "trash")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+                .disabled(!state.cliAvailable || state.actionStatus.isRunning)
+                .help(state.cliAvailable ? "Uninstall this skill" : "Requires the skills CLI")
+                .confirmationDialog(
+                    "Remove \(skill.name)?",
+                    isPresented: $confirmRemove,
+                    titleVisibility: .visible
+                ) {
+                    Button("Remove \(skill.name)", role: .destructive) { state.removeSkill(skill) }
+                    Button("Cancel", role: .cancel) {}
+                } message: {
+                    Text("Uninstalls the skill via the skills CLI.")
+                }
             }
         }
     }
@@ -157,24 +159,26 @@ struct SkillDetailView: View {
             Text("Declared for \(skill.driftMissing.map(\.displayName).joined(separator: ", ")) but not wired on disk.")
                 .font(.callout)
                 .foregroundStyle(Color(hex: 0x7A5800))
-            HStack(spacing: 8) {
-                ForEach(Array(skill.driftMissing).sorted { $0.rawValue < $1.rawValue }) { agent in
-                    Button {
-                        wireTarget = agent
-                    } label: {
-                        if state.actionStatus.isRunning(.wire(skill.id, agent)) {
-                            HStack(spacing: 5) {
-                                ProgressView().controlSize(.small)
-                                Text("Wiring…")
+            if !state.isRemote { // wiring is a write — disabled for read-only remote scopes (D7)
+                HStack(spacing: 8) {
+                    ForEach(Array(skill.driftMissing).sorted { $0.rawValue < $1.rawValue }) { agent in
+                        Button {
+                            wireTarget = agent
+                        } label: {
+                            if state.actionStatus.isRunning(.wire(skill.id, agent)) {
+                                HStack(spacing: 5) {
+                                    ProgressView().controlSize(.small)
+                                    Text("Wiring…")
+                                }
+                            } else {
+                                Text("Wire into \(agent.displayName)")
                             }
-                        } else {
-                            Text("Wire into \(agent.displayName)")
                         }
+                        .buttonStyle(.glassProminent)
+                        .controlSize(.small)
+                        .tint(Theme.drift)
+                        .disabled(state.actionStatus.isRunning)
                     }
-                    .buttonStyle(.glassProminent)
-                    .controlSize(.small)
-                    .tint(Theme.drift)
-                    .disabled(state.actionStatus.isRunning)
                 }
             }
         }
@@ -234,11 +238,13 @@ struct SkillDetailView: View {
             HStack {
                 sectionTitle("SKILL.md")
                 Spacer()
-                Button { state.openInEditor(skill) } label: {
-                    Label("Edit", systemImage: "pencil").font(.caption)
+                if !state.isRemote { // opens a local file — not meaningful for remote skills (D7)
+                    Button { state.openInEditor(skill) } label: {
+                        Label("Edit", systemImage: "pencil").font(.caption)
+                    }
+                    .buttonStyle(.glass)
+                    .controlSize(.small)
                 }
-                .buttonStyle(.glass)
-                .controlSize(.small)
             }
             Text(skill.bodyMarkdown)
                 .font(.system(.callout, design: .monospaced))

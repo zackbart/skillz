@@ -19,7 +19,10 @@ struct SkillProvenance: Hashable {
 struct Skill: AgentResource {
     let canonicalPath: String
     var scope: ResourceScope
-    var id: String { "\(scope.projectRoot ?? "global")::\(canonicalPath)" }
+    /// Which machine this skill was discovered on. Local renders `idTag == nil`, so the
+    /// composite id stays byte-identical to before the HostIO seam existed (see D7).
+    var host: Host = .local
+    var id: String { "\(host.idTag.map { $0 + "::" } ?? "")\(scope.projectRoot ?? "global")::\(canonicalPath)" }
 
     let name: String
     let directoryURL: URL

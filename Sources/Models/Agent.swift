@@ -65,21 +65,13 @@ enum Agent: String, CaseIterable, Identifiable, Hashable {
         }
     }
 
-    private static var home: URL { FileManager.default.homeDirectoryForCurrentUser }
-
-    private static var xdgConfigHome: URL {
-        if let xdg = ProcessInfo.processInfo.environment["XDG_CONFIG_HOME"], !xdg.isEmpty {
-            return URL(fileURLWithPath: xdg)
-        }
-        return home.appendingPathComponent(".config")
-    }
-
-    /// Global/user-level skill discovery directories.
-    var globalSkillDirs: [URL] {
-        let home = Agent.home
+    /// Global/user-level skill discovery directories, anchored at the host's home /
+    /// XDG config dir (so a remote host resolves them remotely).
+    func globalSkillDirs(_ io: HostIO) -> [URL] {
+        let home = io.home
         switch self {
         case .claude: return [home.appendingPathComponent(".claude/skills")]
-        case .opencode: return [Agent.xdgConfigHome.appendingPathComponent("opencode/skills")]
+        case .opencode: return [io.xdgConfigHome.appendingPathComponent("opencode/skills")]
         case .codex: return [home.appendingPathComponent(".codex/skills")]
         case .pi: return [home.appendingPathComponent(".pi/agent/skills")]
         case .agents: return [home.appendingPathComponent(".agents/skills")]

@@ -81,6 +81,17 @@ final class AppState: ObservableObject {
     @Published var selectedProject: URL?
     /// Projects the user has saved — persisted indefinitely, switchable, removable.
     @Published var savedProjects: [URL] = []
+    /// Remote machines the user has added (ssh targets / `~/.ssh/config` aliases), persisted.
+    @Published var savedHosts: [String] = []
+    /// The selected remote target, or nil for the local machine. Not persisted — every
+    /// launch starts Local so the app never tries to reach out to a host on open.
+    @Published var selectedHostTarget: String?
+    // "Add remote host…" prompt state.
+    @Published var showAddHost = false
+    @Published var newHostInput = ""
+    // Password prompt state — non-nil target shows the secure prompt (key auth was refused).
+    @Published var passwordPromptTarget: String?
+    @Published var passwordInput = ""
     // Single-select sidebar filter (native macOS list selection). Reconciles the skill
     // selection on change so the detail pane never shows a filtered-out skill.
     @Published var sidebarFilter: SidebarFilter = .library(.all) { didSet { reconcileSelection() } }
@@ -107,16 +118,20 @@ final class AppState: ObservableObject {
     private let projectsKey = "recentProjects" // key kept for continuity with existing data
     private let activeProjectKey = "activeProject"
     private let scopeKey = "scopeMode"
+    private let hostsKey = "remoteHosts"
     /// Bumped on every reload; a detached scan only applies if it's still the latest.
     private var reloadGeneration = 0
-    /// Last-known scan per scope. Seeded into `skills` instantly on a switch, then a fresh
-    /// scan always follows and overwrites — a pure render optimization, not a staleness risk.
-    private var scanCache: [ResourceScope: [Skill]] = [:]
-    /// Which scope `skills` currently reflects — drives the seed-on-switch path.
-    private var skillsScope: ResourceScope?
+    /// Scan-cache key: a scope is only unique WITHIN a host, so remote and local scans of
+    /// the "same" scope don't collide. (Slice 1 makes `currentHost` non-local.)
+    private struct ScanKey: Hashable { let host: Host; let scope: ResourceScope }
+    /// Last-known scan per (host, scope). Seeded into `skills` instantly on a switch, then a
+    /// fresh scan always follows and overwrites — a pure render optimization, not a staleness risk.
+    private var scanCache: [ScanKey: [Skill]] = [:]
+    /// Which key `skills` currently reflects — drives the seed-on-switch path.
+    private var skillsScope: ScanKey?
     /// MCP equivalents of the above (same seed-on-switch / generation-guard discipline).
-    private var mcpScanCache: [ResourceScope: McpScanResult] = [:]
-    private var mcpScope: ResourceScope?
+    private var mcpScanCache: [ScanKey: McpScanResult] = [:]
+    private var mcpScope: ScanKey?
     /// Skill dirs the latest scan looked at; what the FileWatcher should watch. Captured
     /// from the scan (incl. nested ancestor/descendant bases) so nested edits fire reloads.
     private var watchPaths: [String] = []
@@ -124,6 +139,7 @@ final class AppState: ObservableObject {
     init() {
         savedProjects = (UserDefaults.standard.array(forKey: projectsKey) as? [String])?
             .map { URL(fileURLWithPath: $0) } ?? []
+        savedHosts = (UserDefaults.standard.array(forKey: hostsKey) as? [String]) ?? []
         // Remember the last active project so switching to the Project tab is instant
         // (only restore it if it's still a saved project).
         if let path = UserDefaults.standard.string(forKey: activeProjectKey),
@@ -163,6 +179,96 @@ final class AppState: ObservableObject {
     var currentScope: ResourceScope {
         if scopeMode == .project, let root = selectedProject { return .project(root: root.path) }
         return .global
+    }
+
+    /// The host the current scope scans. Always `.local` today; Slice 1 makes it real.
+    /// The machine the current scan targets: a saved remote, or local.
+    var currentHost: Host {
+        selectedHostTarget.flatMap(Host.parse) ?? .local
+    }
+
+    /// Remote scopes are read-only and global-only (see D7) — drives UI gating.
+    var isRemote: Bool { currentHost != .local }
+
+    // MARK: - Machine selection
+
+    /// Switch the scan to a remote host (read-only, global). Forces Global scope: remote
+    /// project discovery isn't modelled yet (D7), so we never strand in Project scope.
+    /// Probes connectivity first; key auth is tried, and on refusal the user is prompted
+    /// for a password (held only for the session).
+    func selectHost(_ target: String) {
+        resetFilters()
+        selectedHostTarget = target
+        scopeMode = .global
+        probeAndReload(target)
+    }
+
+    /// Probe `target` off-main; reload on success, prompt for a password on auth refusal,
+    /// or surface a connection error.
+    private func probeAndReload(_ target: String) {
+        isLoading = true
+        lastError = nil
+        Task.detached(priority: .userInitiated) {
+            let result = RemoteHostIO(target: target).connect()
+            await MainActor.run {
+                guard self.selectedHostTarget == target else { return } // user moved on
+                switch result {
+                case .ok:
+                    self.reload()
+                case .needsPassword:
+                    self.isLoading = false
+                    self.passwordInput = ""
+                    self.passwordPromptTarget = target
+                case .failed(let msg):
+                    self.isLoading = false
+                    self.lastError = "Couldn’t connect to \(target): \(msg)"
+                    self.selectLocal()
+                }
+            }
+        }
+    }
+
+    /// User submitted a password for the prompted host: keep it for the session and retry.
+    func submitPassword() {
+        guard let target = passwordPromptTarget, !passwordInput.isEmpty else { return }
+        RemoteCredentials.set(passwordInput, for: target)
+        passwordInput = ""
+        passwordPromptTarget = nil
+        probeAndReload(target)
+    }
+
+    /// User cancelled the password prompt: drop back to Local.
+    func cancelPassword() {
+        passwordPromptTarget = nil
+        passwordInput = ""
+        selectLocal()
+    }
+
+    /// Switch back to the local machine.
+    func selectLocal() {
+        guard selectedHostTarget != nil else { return }
+        resetFilters()
+        selectedHostTarget = nil
+        reload()
+    }
+
+    /// Add (and select) a remote host from user input ("user@host" or an ssh alias).
+    func addRemoteHost(_ input: String) {
+        guard let host = Host.parse(input) else { return }
+        let target = host.target
+        if !savedHosts.contains(target) {
+            savedHosts.append(target)
+            UserDefaults.standard.set(savedHosts, forKey: hostsKey)
+        }
+        selectHost(target)
+    }
+
+    /// Forget a saved remote host; clear any session password and fall back to Local.
+    func removeHost(_ target: String) {
+        savedHosts.removeAll { $0 == target }
+        UserDefaults.standard.set(savedHosts, forKey: hostsKey)
+        RemoteCredentials.clear(target)
+        if selectedHostTarget == target { selectLocal() }
     }
 
     var sources: [(name: String, count: Int)] {
@@ -352,7 +458,7 @@ final class AppState: ObservableObject {
     }
 
     private func reloadSkills() {
-        let key = currentScope
+        let key = ScanKey(host: currentHost, scope: currentScope)
         // On a scope/project SWITCH, paint the target scope's last-known list immediately
         // (instant feel), or clear the previous scope's list so a stale wrong-project list
         // never lingers. The background scan below always refreshes it.
@@ -366,19 +472,23 @@ final class AppState: ObservableObject {
         let gen = reloadGeneration
         let mode = scopeMode
         let project = selectedProject
+        let host = currentHost
         Task.detached(priority: .userInitiated) {
             let scanned: [Skill]
             switch mode {
-            case .global: scanned = SkillScanner.scanGlobal()
-            case .project: scanned = project.map { SkillScanner.scanProject(root: $0) } ?? []
+            case .global: scanned = SkillScanner.scanGlobal(host: host)
+            case .project: scanned = project.map { SkillScanner.scanProject(root: $0, host: host) } ?? []
             }
             // Always watch the canonical store; in project scope also watch every skill dir
             // the scan touched (incl. nested bases) so nested edits trigger a reload.
-            var built = Agent.allCases.flatMap { $0.globalSkillDirs.map(\.path) }
-            if mode == .project, let project { built += SkillScanner.projectSkillDirPaths(from: project) }
+            // Watcher paths are local-only (FSEvents), so resolve against LocalHostIO.
+            var built = Agent.allCases.flatMap { $0.globalSkillDirs(LocalHostIO()).map(\.path) }
+            if mode == .project, let project {
+                built += SkillScanner.projectSkillDirPaths(from: project, io: LocalHostIO())
+            }
             let watch = built
-            let cli = SkillsCLIService.isAvailable
-            let git = GitStatusService.isAvailable
+            let cli = SkillsCLIService.isAvailable(host.makeIO())
+            let git = GitStatusService.isAvailable(host.makeIO())
             await MainActor.run {
                 // Drop a scan that a newer reload (e.g. a scope switch) has superseded,
                 // so a slow global scan can't overwrite the current project's list.
@@ -410,7 +520,14 @@ final class AppState: ObservableObject {
     }
 
     private func reloadMcp() {
-        let key = currentScope
+        // MCP scanning is local-only in Slice 1 (McpScanner isn't host-threaded, D7) — never
+        // run it against a remote selection, which would silently show LOCAL servers.
+        if isRemote {
+            mcpServers = []; mcpIssues = []; mcpSelection = nil; isLoading = false
+            watcher?.stop()
+            return
+        }
+        let key = ScanKey(host: currentHost, scope: currentScope)
         if mcpScope != key {
             let cached = mcpScanCache[key]
             mcpServers = cached?.servers ?? []
@@ -431,7 +548,7 @@ final class AppState: ObservableObject {
             }
             let watch = McpScanner.configWatchPaths(
                 global: mode == .global, root: mode == .project ? project : nil)
-            let git = GitStatusService.isAvailable
+            let git = GitStatusService.isAvailable(LocalHostIO())
             await MainActor.run {
                 guard gen == self.reloadGeneration else { return }
                 self.mcpServers = result.servers
@@ -455,6 +572,9 @@ final class AppState: ObservableObject {
     }
 
     private func updateWatcher() {
+        // FSEvents is local-only (no SSH analog, D7): remote scopes refresh via the manual
+        // Refresh button, not a live watcher.
+        guard !isRemote else { watcher?.stop(); return }
         // Watch exactly the dirs the latest scan looked at (canonical store + every project
         // skill dir incl. nested bases), captured in `watchPaths` so a symlinked skill's
         // real files and nested-package skills both fire reloads.
@@ -467,6 +587,7 @@ final class AppState: ObservableObject {
     /// and reload land back on the main actor. `onSuccessSelect` re-selects a skill by
     /// name once it (re)appears after the reload.
     private func perform(_ id: ActionID, _ label: String, onSuccessSelect: String? = nil, _ work: @escaping () -> CLIResult) {
+        guard !isRemote else { return } // remote scopes are read-only (D7)
         actionStatus = .running(id, label)
         lastError = nil
         Task.detached(priority: .userInitiated) {
@@ -489,7 +610,7 @@ final class AppState: ObservableObject {
         let scope = currentScope
         let selectHint = skill ?? Self.lastPathComponent(of: ref)
         perform(.install, "Installing", onSuccessSelect: selectHint) {
-            SkillsCLIService.add(ref: ref, skill: skill, agents: agents, scope: scope, copy: copy)
+            SkillsCLIService.add(ref: ref, skill: skill, agents: agents, scope: scope, copy: copy, io: LocalHostIO())
         }
     }
 
@@ -497,7 +618,7 @@ final class AppState: ObservableObject {
     func updateSkill(_ skill: Skill) {
         let scope = skill.scope
         let name = skill.name
-        perform(.update(skill.id), "Updating \(name)") { SkillsCLIService.update(name: name, scope: scope) }
+        perform(.update(skill.id), "Updating \(name)") { SkillsCLIService.update(name: name, scope: scope, io: LocalHostIO()) }
     }
 
     /// REMOVE a skill fully, or unwire it from specific agents when `agents` is non-empty.
@@ -505,7 +626,7 @@ final class AppState: ObservableObject {
         let scope = skill.scope
         let name = skill.name
         let label = agents.isEmpty ? "Removing \(name)" : "Unwiring \(name)"
-        perform(.remove(skill.id), label) { SkillsCLIService.remove(name: name, agents: agents, scope: scope) }
+        perform(.remove(skill.id), label) { SkillsCLIService.remove(name: name, agents: agents, scope: scope, io: LocalHostIO()) }
     }
 
     /// "owner/repo" → "repo" select hint for post-install reselection.
@@ -522,6 +643,7 @@ final class AppState: ObservableObject {
     /// missing drift case) rather than the CLI — `skills add <localPath>` is built for
     /// remote refs and may re-clone an already-canonical skill.
     func wire(_ skill: Skill, into agent: Agent) {
+        guard !isRemote else { return } // remote scopes are read-only (D7)
         let id = ActionID.wire(skill.id, agent)
         actionStatus = .running(id, "Wiring \(agent.displayName)")
         lastError = nil
@@ -537,6 +659,7 @@ final class AppState: ObservableObject {
 
     /// Batch-wire every skill that has missing-agent drift.
     func fixAllDrift() {
+        guard !isRemote else { return } // remote scopes are read-only (D7)
         let targets = skills.filter { !$0.driftMissing.isEmpty }
         guard !targets.isEmpty else { return }
         actionStatus = .running(.fixAllDrift, "Fixing drift")
@@ -571,7 +694,7 @@ final class AppState: ObservableObject {
     nonisolated static func rawSymlinkWire(_ skill: Skill, into agent: Agent) -> CLIResult {
         let dir: URL
         if skill.scope.isGlobal {
-            guard let g = agent.globalSkillDirs.first else {
+            guard let g = agent.globalSkillDirs(LocalHostIO()).first else {
                 return CLIResult(exitCode: 1, stdout: "", stderr: "No global skills dir for \(agent.displayName).")
             }
             dir = g
@@ -692,6 +815,7 @@ final class AppState: ObservableObject {
     private func runMcpWrites(_ id: ActionID, _ label: String,
                               _ jobs: [(McpWriteEngine.Op, McpConfigLocation)],
                               selectName: String?) {
+        guard !isRemote else { return } // remote scopes are read-only (D7)
         guard !jobs.isEmpty else { return }
         actionStatus = .running(id, label)
         lastError = nil
@@ -717,11 +841,15 @@ final class AppState: ObservableObject {
     }
 
     func openInEditor(_ skill: Skill) {
+        // Remote skills' URLs are remote paths, not local files — opening them would point
+        // at the wrong place (and "edit" is a write affordance, out of scope for remote).
+        guard skill.host == .local else { return }
         NSWorkspace.shared.open(skill.skillMdURL)
     }
 
     /// Open a bundled file in its default app, or reveal a packaged subdirectory in Finder.
     func openBundledFile(_ file: BundledFile) {
+        guard !isRemote else { return }
         if file.isDirectory {
             NSWorkspace.shared.activateFileViewerSelecting([file.url])
         } else {

@@ -196,6 +196,53 @@ final class CodecTests: XCTestCase {
         XCTAssertEqual(map["foo"]?.portable?.args, ["-y", "pkg"])
     }
 
+    // MARK: - RemoteHostIO.parseListDir (the SSH listing parser, no live host needed)
+
+    func testParseListDir() {
+        // Records sep \036, fields sep \037: name, isDir, isSymlink, linkTarget.
+        let blob = "real-skill\u{1F}1\u{1F}0\u{1F}\u{1E}"
+            + "linked\u{1F}1\u{1F}1\u{1F}../../.agents/skills/linked\u{1E}"
+            + "notes.md\u{1F}0\u{1F}0\u{1F}\u{1E}"
+        let entries = RemoteHostIO.parseListDir(Data(blob.utf8))
+        XCTAssertEqual(entries.count, 3)
+
+        XCTAssertEqual(entries[0].name, "real-skill")
+        XCTAssertTrue(entries[0].isDir)
+        XCTAssertFalse(entries[0].isSymlink)
+        XCTAssertNil(entries[0].linkTarget)
+
+        XCTAssertTrue(entries[1].isSymlink)
+        XCTAssertTrue(entries[1].isDir) // symlink-to-dir: dir flag follows the link
+        XCTAssertEqual(entries[1].linkTarget, "../../.agents/skills/linked")
+
+        XCTAssertFalse(entries[2].isDir)
+        XCTAssertNil(entries[2].linkTarget)
+    }
+
+    func testParseListDirEmptyAndMalformed() {
+        XCTAssertTrue(RemoteHostIO.parseListDir(Data()).isEmpty)
+        // A short (malformed) record is dropped, a valid one survives.
+        let blob = "bad\u{1F}1\u{1E}good\u{1F}0\u{1F}0\u{1F}\u{1E}"
+        let entries = RemoteHostIO.parseListDir(Data(blob.utf8))
+        XCTAssertEqual(entries.map(\.name), ["good"])
+    }
+
+    // MARK: - RemoteHostIO.classifyConnect (key-fail → prompt routing)
+
+    func testClassifyConnect() {
+        XCTAssertEqual(RemoteHostIO.classifyConnect(exit: 0, stderr: ""), .ok)
+        // Auth refusals route to the password prompt.
+        XCTAssertEqual(
+            RemoteHostIO.classifyConnect(exit: 255, stderr: "zackbart@h: Permission denied (publickey,password)."),
+            .needsPassword)
+        XCTAssertEqual(
+            RemoteHostIO.classifyConnect(exit: 255, stderr: "Received disconnect... No more authentication methods available"),
+            .needsPassword)
+        // Network/DNS failures surface as an error, not a prompt.
+        if case .failed = RemoteHostIO.classifyConnect(exit: 255, stderr: "ssh: Could not resolve hostname nope") {
+        } else { XCTFail("expected .failed for DNS error") }
+    }
+
     // MARK: - Helpers
 
     private func tempDir() throws -> URL {

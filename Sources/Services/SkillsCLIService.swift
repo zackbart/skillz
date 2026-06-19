@@ -28,51 +28,36 @@ struct CLIResult {
 /// install locations rather than relying on `npx` (which can be slow / networked /
 /// a different version). All mutations should route through this service.
 enum SkillsCLIService {
-    static func locate() -> URL? {
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
+    static func locate(_ io: HostIO) -> URL? {
+        let home = io.home.path
         let candidates = [
             "/opt/homebrew/bin/skills",
             "/usr/local/bin/skills",
             "\(home)/.local/bin/skills",
         ]
-        for path in candidates where FileManager.default.isExecutableFile(atPath: path) {
+        for path in candidates where io.exists(path) {
             return URL(fileURLWithPath: path)
         }
         return nil
     }
 
-    static var isAvailable: Bool { locate() != nil }
+    static func isAvailable(_ io: HostIO) -> Bool { locate(io) != nil }
 
     /// `skills list -g --json` — global skills with their declared agent targets.
-    static func listGlobalJSON() -> [CLISkill] {
-        run(arguments: ["list", "-g", "--json"])
+    static func listGlobalJSON(io: HostIO) -> [CLISkill] {
+        run(arguments: ["list", "-g", "--json"], io: io)
     }
 
     /// `skills list --json` run in `directory` — project-scoped skills.
-    static func listProjectJSON(in directory: URL) -> [CLISkill] {
-        run(arguments: ["list", "--json"], cwd: directory)
+    static func listProjectJSON(in directory: URL, io: HostIO) -> [CLISkill] {
+        run(arguments: ["list", "--json"], cwd: directory, io: io)
     }
 
-    private static func run(arguments: [String], cwd: URL? = nil) -> [CLISkill] {
-        guard let bin = locate() else { return [] }
-        let process = Process()
-        process.executableURL = bin
-        process.arguments = arguments
-        if let cwd { process.currentDirectoryURL = cwd }
-
-        let stdout = Pipe()
-        process.standardOutput = stdout
-        process.standardError = Pipe()
-
-        do {
-            try process.run()
-            process.waitUntilExit()
-        } catch {
-            return []
-        }
-
-        let data = stdout.fileHandleForReading.readDataToEndOfFile()
-        return (try? JSONDecoder().decode([CLISkill].self, from: data)) ?? []
+    private static func run(arguments: [String], cwd: URL? = nil, io: HostIO) -> [CLISkill] {
+        guard let bin = locate(io) else { return [] }
+        let r = io.run([bin.path] + arguments, cwd: cwd?.path, stdin: nil)
+        guard r.exit != -1 else { return [] }
+        return (try? JSONDecoder().decode([CLISkill].self, from: r.stdout)) ?? []
     }
 
     // MARK: - Mutations
@@ -92,42 +77,18 @@ enum SkillsCLIService {
     /// Generic capturing runner (parallel to `run`, but keeps exit code + streams).
     /// Runs synchronously — callers must invoke it off the main thread.
     @discardableResult
-    static func runCapturing(arguments: [String], cwd: URL? = nil) -> CLIResult {
-        guard let bin = locate() else {
+    static func runCapturing(arguments: [String], cwd: URL? = nil, io: HostIO) -> CLIResult {
+        guard let bin = locate(io) else {
             return CLIResult(exitCode: 127, stdout: "", stderr: "skills CLI not found on PATH")
         }
-        let p = Process()
-        p.executableURL = bin
-        p.arguments = arguments
-        if let cwd { p.currentDirectoryURL = cwd }
-        let out = Pipe(), err = Pipe()
-        p.standardOutput = out
-        p.standardError = err
-        do {
-            try p.run()
-        } catch {
-            return CLIResult(exitCode: 126, stdout: "", stderr: error.localizedDescription)
+        let r = io.run([bin.path] + arguments, cwd: cwd?.path, stdin: nil)
+        if r.exit == -1 {
+            return CLIResult(exitCode: 126, stdout: "", stderr: "failed to launch skills CLI")
         }
-        // Drain stdout AND stderr CONCURRENTLY before waiting: reading one to EOF first
-        // would deadlock if the child fills the other pipe's buffer while it's still open.
-        let outBox = DataBox(), errBox = DataBox()
-        let group = DispatchGroup()
-        DispatchQueue.global().async(group: group) {
-            outBox.data = out.fileHandleForReading.readDataToEndOfFile()
-        }
-        DispatchQueue.global().async(group: group) {
-            errBox.data = err.fileHandleForReading.readDataToEndOfFile()
-        }
-        group.wait()
-        p.waitUntilExit()
-        return CLIResult(exitCode: p.terminationStatus,
-                         stdout: String(decoding: outBox.data, as: UTF8.self),
-                         stderr: String(decoding: errBox.data, as: UTF8.self))
+        return CLIResult(exitCode: r.exit,
+                         stdout: String(decoding: r.stdout, as: UTF8.self),
+                         stderr: String(decoding: r.stderr, as: UTF8.self))
     }
-
-    /// Mutable reference box so the two concurrent pipe-reader closures each write a
-    /// distinct slot; `group.wait()` establishes the happens-before before we read them.
-    private final class DataBox: @unchecked Sendable { var data = Data() }
 
     /// `-a` takes the agent slugs as separate following tokens (one flag, many values) —
     /// NOT a comma-joined string, which the CLI would treat as a single invalid slug.
@@ -146,31 +107,31 @@ enum SkillsCLIService {
 
     /// INSTALL a whole package or a specific skill into specific agents.
     /// `skills add <ref> [-s <skill>] (-g|-p) -y [--copy] [-a <slug>...]`
-    static func add(ref: String, skill: String? = nil, agents: [Agent] = [], scope: ResourceScope, copy: Bool = false) -> CLIResult {
+    static func add(ref: String, skill: String? = nil, agents: [Agent] = [], scope: ResourceScope, copy: Bool = false, io: HostIO) -> CLIResult {
         let s = scopeArgs(scope)
         var a = ["add", ref] + s.args + ["-y"]
         if let skill { a += ["-s", skill] }
         if copy { a += ["--copy"] }
         a += agentArgs(agents) // variadic flag last
-        return runCapturing(arguments: a, cwd: s.cwd)
+        return runCapturing(arguments: a, cwd: s.cwd, io: io)
     }
 
     /// REMOVE a skill fully, or unwire from specific agents only (`-a`).
     /// `skills remove <name> (-g|-p) -y [-a <slug>...]`
-    static func remove(name: String, agents: [Agent] = [], scope: ResourceScope) -> CLIResult {
+    static func remove(name: String, agents: [Agent] = [], scope: ResourceScope, io: HostIO) -> CLIResult {
         let s = scopeArgs(scope)
         var a = ["remove", name] + s.args + ["-y"]
         a += agentArgs(agents) // variadic flag last
-        return runCapturing(arguments: a, cwd: s.cwd)
+        return runCapturing(arguments: a, cwd: s.cwd, io: io)
     }
 
     /// UPDATE installed skill(s) to latest from source.
     /// `skills update [<name>] (-g|-p) -y`
-    static func update(name: String?, scope: ResourceScope) -> CLIResult {
+    static func update(name: String?, scope: ResourceScope, io: HostIO) -> CLIResult {
         let s = scopeArgs(scope)
         var a = ["update"]
         if let name { a.append(name) }
         a += s.args + ["-y"]
-        return runCapturing(arguments: a, cwd: s.cwd)
+        return runCapturing(arguments: a, cwd: s.cwd, io: io)
     }
 }

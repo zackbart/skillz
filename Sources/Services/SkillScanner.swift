@@ -5,18 +5,22 @@ import Foundation
 /// (symlink-resolved) directory; the same canonical skill referenced by several
 /// agents collapses into one `Skill` with the union of `wiredAgents`.
 enum SkillScanner {
-    static func scanGlobal() -> [Skill] {
-        scan(
+    static func scanGlobal(host: Host) -> [Skill] {
+        let io = host.makeIO()
+        return scan(
             scope: .global,
-            dirs: Agent.allCases.map { agent in (agent, agent.globalSkillDirs) },
-            lock: SkillLockReader.readGlobal(),
-            declared: declaredByPath(SkillsCLIService.listGlobalJSON())
+            dirs: Agent.allCases.map { agent in (agent, agent.globalSkillDirs(io)) },
+            lock: SkillLockReader.readGlobal(io: io),
+            declared: declaredByPath(SkillsCLIService.listGlobalJSON(io: io), io: io),
+            io: io,
+            host: host
         )
     }
 
-    static func scanProject(root: URL) -> [Skill] {
+    static func scanProject(root: URL, host: Host) -> [Skill] {
+        let io = host.makeIO()
         var dirs: [(Agent, [URL])] = []
-        for base in projectBases(from: root) {
+        for base in projectBases(from: root, io: io) {
             for agent in Agent.allCases {
                 dirs.append((agent, agent.projectSkillDirs.map { base.appendingPathComponent($0) }))
             }
@@ -24,8 +28,10 @@ enum SkillScanner {
         return scan(
             scope: .project(root: root.path),
             dirs: dirs,
-            lock: SkillLockReader.readProject(root: root),
-            declared: declaredByPath(SkillsCLIService.listProjectJSON(in: root))
+            lock: SkillLockReader.readProject(root: root, io: io),
+            declared: declaredByPath(SkillsCLIService.listProjectJSON(in: root, io: io), io: io),
+            io: io,
+            host: host
         )
     }
 
@@ -35,30 +41,29 @@ enum SkillScanner {
         scope: ResourceScope,
         dirs: [(Agent, [URL])],
         lock: [String: SkillProvenance],
-        declared: [String: Set<Agent>]
+        declared: [String: Set<Agent>],
+        io: HostIO,
+        host: Host
     ) -> [Skill] {
-        let fm = FileManager.default
         var byCanonical: [String: Skill] = [:]
         var linkPaths: [String: Set<String>] = [:] // canonicalPath -> entry (possibly symlink) paths
 
         for (agent, agentDirs) in dirs {
             for dir in agentDirs {
-                guard let entries = try? fm.contentsOfDirectory(
-                    at: dir, includingPropertiesForKeys: [.isSymbolicLinkKey], options: [.skipsHiddenFiles]
-                ) else { continue }
+                let entries = (try? io.listDir(dir.path)) ?? []
 
                 for entry in entries {
-                    let skillMd = entry.appendingPathComponent("SKILL.md")
-                    guard fm.fileExists(atPath: skillMd.path) else { continue }
+                    let entryPath = URL(fileURLWithPath: dir.path).appendingPathComponent(entry.name)
+                    let skillMd = entryPath.appendingPathComponent("SKILL.md")
+                    guard io.exists(skillMd.path) else { continue }
 
                     // Is this entry an actual symlink (→ canonical store), or a real directory
-                    // living in the agent's own dir? lstat via attributesOfItem (doesn't follow).
-                    let attrs = try? fm.attributesOfItem(atPath: entry.path)
-                    let isLink = (attrs?[.type] as? FileAttributeType) == .typeSymbolicLink
+                    // living in the agent's own dir? lstat (doesn't follow) via DirEntry.
+                    let isLink = entry.isSymlink
 
-                    let canonical = entry.resolvingSymlinksInPath()
+                    let canonical = URL(fileURLWithPath: io.realpath(entryPath.path))
                     let key = canonical.path
-                    linkPaths[key, default: []].insert(entry.path)
+                    linkPaths[key, default: []].insert(entryPath.path)
 
                     if byCanonical[key] != nil {
                         byCanonical[key]?.wiredAgents.insert(agent)
@@ -67,7 +72,8 @@ enum SkillScanner {
                     }
 
                     let canonicalMd = canonical.appendingPathComponent("SKILL.md")
-                    let content = (try? String(contentsOf: canonicalMd, encoding: .utf8)) ?? ""
+                    let content = (try? io.readFile(canonicalMd.path))
+                        .flatMap { String(data: $0, encoding: .utf8) } ?? ""
                     let parsed = FrontmatterParser.parse(content)
                     let basename = canonical.lastPathComponent
                     let name = (parsed.frontmatter["name"] as? String) ?? basename
@@ -89,10 +95,11 @@ enum SkillScanner {
                         wiredAgents: [agent],
                         provenance: prov
                     )
+                    skill.host = host
                     skill.isCLIManaged = (prov != nil)
                     if isLink { skill.symlinkedAgents = [agent] }
                     skill.declaredAgents = declared[key] ?? []
-                    skill.bundledFiles = bundledFiles(in: canonical, fm: fm)
+                    skill.bundledFiles = bundledFiles(in: canonical, io: io)
                     skill.searchHaystack =
                         (name + " " + (skill.summary ?? "") + " " + parsed.body).lowercased()
                     byCanonical[key] = skill
@@ -100,20 +107,21 @@ enum SkillScanner {
             }
         }
 
-        return finalize(byCanonical, linkPaths: linkPaths, projectRoot: scope.projectRoot)
+        return finalize(byCanonical, linkPaths: linkPaths, projectRoot: scope.projectRoot, io: io)
     }
 
     private static func finalize(
         _ byCanonical: [String: Skill],
         linkPaths: [String: Set<String>],
-        projectRoot: String?
+        projectRoot: String?,
+        io: HostIO
     ) -> [Skill] {
         var skills = Array(byCanonical.values)
 
         // Git status — classify canonical dirs + their (unresolved) link paths in one batch.
         var allPaths = Set(byCanonical.keys)
         for (_, links) in linkPaths { allPaths.formUnion(links) }
-        let git = GitStatusService.classify(paths: Array(allPaths))
+        let git = GitStatusService.classify(paths: Array(allPaths), io: io)
 
         // Project-relative locations, from the (unresolved) reference paths.
         if let root = projectRoot {
@@ -171,9 +179,9 @@ enum SkillScanner {
     /// Bases to probe for agent skill dirs: ancestors (chosen dir → git root) plus
     /// descendants up to `maxDescentDepth` levels (monorepos nest .claude/.agents in
     /// subpackages). Deduped by standardized path, preserving discovery order.
-    static func projectBases(from root: URL) -> [URL] {
-        var bases = ancestorRoots(from: root)
-        bases.append(contentsOf: descendantRoots(from: root))
+    static func projectBases(from root: URL, io: HostIO) -> [URL] {
+        var bases = ancestorRoots(from: root, io: io)
+        bases.append(contentsOf: descendantRoots(from: root, io: io))
         var seen = Set<String>()
         return bases.filter { seen.insert($0.standardizedFileURL.path).inserted }
     }
@@ -182,8 +190,8 @@ enum SkillScanner {
     /// same ancestor+descendant bases `scanProject` scans — so edits to a nested package's
     /// `.claude/skills` fire a reload, not just the chosen root's. FileWatcher filters out
     /// paths that don't exist, so we needn't stat here.
-    static func projectSkillDirPaths(from root: URL) -> [String] {
-        projectBases(from: root).flatMap { base in
+    static func projectSkillDirPaths(from root: URL, io: HostIO) -> [String] {
+        projectBases(from: root, io: io).flatMap { base in
             Agent.allCases.flatMap { agent in
                 agent.projectSkillDirs.map { base.appendingPathComponent($0).path }
             }
@@ -208,23 +216,20 @@ enum SkillScanner {
     /// returning every subdirectory that could host an agent skills dir. Skips hidden
     /// dirs (incl. the agent dirs themselves — we probe those by name at each base),
     /// symlinks (cycle-safe), and pruned build/dependency dirs.
-    private static func descendantRoots(from root: URL) -> [URL] {
-        let fm = FileManager.default
-        let keys: [URLResourceKey] = [.isDirectoryKey, .isSymbolicLinkKey]
+    private static func descendantRoots(from root: URL, io: HostIO) -> [URL] {
         var result: [URL] = []
         var frontier: [(dir: URL, depth: Int)] = [(root.standardizedFileURL, 0)]
 
         while !frontier.isEmpty {
             let (dir, depth) = frontier.removeFirst()
             if depth >= maxDescentDepth { continue }
-            guard let children = try? fm.contentsOfDirectory(
-                at: dir, includingPropertiesForKeys: keys, options: [.skipsHiddenFiles]
-            ) else { continue }
+            let children = (try? io.listDir(dir.path)) ?? []
 
-            for child in children {
-                let vals = try? child.resourceValues(forKeys: Set(keys))
-                guard vals?.isDirectory == true, vals?.isSymbolicLink != true else { continue }
-                if pruneDirNames.contains(child.lastPathComponent) { continue }
+            for entry in children {
+                // listDir already skips hidden entries; only descend into real dirs (not symlinks).
+                guard entry.isDir, !entry.isSymlink else { continue }
+                if pruneDirNames.contains(entry.name) { continue }
+                let child = dir.appendingPathComponent(entry.name)
                 result.append(child)
                 frontier.append((child, depth + 1))
             }
@@ -234,8 +239,8 @@ enum SkillScanner {
 
     /// Walk from `start` up to (and including) the git repo root; if not in a repo,
     /// just return `start`. Used so project skills in ancestor dirs are discovered.
-    private static func ancestorRoots(from start: URL) -> [URL] {
-        let top = gitTopLevel(for: start)
+    private static func ancestorRoots(from start: URL, io: HostIO) -> [URL] {
+        let top = gitTopLevel(for: start, io: io)
         var dirs: [URL] = []
         var cur = start.standardizedFileURL
         while true {
@@ -249,38 +254,32 @@ enum SkillScanner {
         return dirs
     }
 
-    private static func gitTopLevel(for dir: URL) -> URL? {
-        guard let git = GitStatusService.gitPath else { return nil }
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: git)
-        p.arguments = ["-C", dir.path, "rev-parse", "--show-toplevel"]
-        let out = Pipe(); p.standardOutput = out; p.standardError = Pipe()
-        do { try p.run(); p.waitUntilExit() } catch { return nil }
-        guard p.terminationStatus == 0 else { return nil }
-        let s = String(data: out.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
+    private static func gitTopLevel(for dir: URL, io: HostIO) -> URL? {
+        guard let git = GitStatusService.gitPath(io) else { return nil }
+        let r = io.run([git, "-C", dir.path, "rev-parse", "--show-toplevel"], cwd: nil, stdin: nil)
+        guard r.exit == 0 else { return nil }
+        let s = String(data: r.stdout, encoding: .utf8)?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return s.isEmpty ? nil : URL(fileURLWithPath: s)
     }
 
     /// Top-level entries packaged with a skill (excluding SKILL.md), dirs-first then by
-    /// name. One `contentsOfDirectory` per unique skill — a cheap FS read, no subprocess.
-    private static func bundledFiles(in canonical: URL, fm: FileManager) -> [BundledFile] {
-        guard let entries = try? fm.contentsOfDirectory(
-            at: canonical, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]
-        ) else { return [] }
+    /// name. One `listDir` per unique skill — a cheap FS read, no subprocess.
+    private static func bundledFiles(in canonical: URL, io: HostIO) -> [BundledFile] {
+        let entries = (try? io.listDir(canonical.path)) ?? []
         return entries
-            .filter { $0.lastPathComponent != "SKILL.md" }
-            .map { BundledFile(url: $0, isDirectory: (try? $0.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true) }
+            .filter { $0.name != "SKILL.md" }
+            .map { BundledFile(url: canonical.appendingPathComponent($0.name), isDirectory: $0.isDir) }
             .sorted {
                 if $0.isDirectory != $1.isDirectory { return $0.isDirectory && !$1.isDirectory }
                 return $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending
             }
     }
 
-    private static func declaredByPath(_ items: [CLISkill]) -> [String: Set<Agent>] {
+    private static func declaredByPath(_ items: [CLISkill], io: HostIO) -> [String: Set<Agent>] {
         var out: [String: Set<Agent>] = [:]
         for item in items {
-            let p = URL(fileURLWithPath: item.path).resolvingSymlinksInPath().path
+            let p = io.realpath(item.path)
             out[p, default: []].formUnion(item.agents.compactMap(Agent.from(cliDisplayName:)))
         }
         return out

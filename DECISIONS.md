@@ -60,6 +60,26 @@ pattern (`MCP.md` → mirror into each config) — useful prior art / possible i
 **Cost now:** the kind switcher in the IA + naming the model `AgentResource` instead of hard-coding
 `Skill` everywhere. We do **not** build MCP discovery, parsing, or editing yet.
 
+## D7 — `HostIO` seam: scan local OR remote (over SSH) behind one protocol
+To let Loadout inventory skills/MCP on **remote machines** (not just the local one), all
+local-bound IO sits behind a small `HostIO` protocol — filesystem reads, symlink resolution,
+process spawns, and the host's `home`/`xdgConfigHome`. `LocalHostIO` wraps today's
+Foundation/`Process` calls verbatim-equivalently (so introducing the seam changed no local
+behavior); a `RemoteHostIO` runs the same operations over the user's `ssh` with a multiplexed
+ControlMaster socket.
+
+**Carrying the host.** A `Host` value (`.local` / `.remote(user,host,alias?)`) lives on the
+resource (`Skill.host`/`McpServer.host`), not on `ResourceScope` (left untouched). It folds into
+`id` only for remote (`idTag == nil` locally → ids unchanged), so the same canonical skill on two
+machines stays distinct, and `host != .local` gates mutation/file-open affordances.
+
+**Scope of the seam.** Threaded through the **skill-scan path only** (Agent host-anchoring,
+SkillScanner, SkillLockReader, GitStatusService, SkillsCLIService). McpScanner/codec/write-engine
+are deliberately NOT threaded yet — remote MCP and any remote **mutation** (writes lose atomicity
+over SSH; FSEvents has no remote analog) are out of scope until a later slice; `RemoteHostIO` is
+read-only. **Supersedes D3's never-built `ResourceProvider`** — that was an orthogonal *scan-provider*
+seam; this is an *IO-primitive* seam, and discovery stayed in the existing static-enum scanners.
+
 ## D5 — Install rule: write `.agents/skills`, symlink only `.claude` (verified)
 Confirmed against each agent's own docs that 3 of 4 read the `.agents/skills` canonical store at BOTH global and project scope; Claude Code is the sole exception.
 

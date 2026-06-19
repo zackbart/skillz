@@ -33,7 +33,7 @@ enum McpScanner {
 
     static func scanProject(root: URL) -> McpScanResult {
         var feeds: [Feed] = []
-        for base in SkillScanner.projectBases(from: root) {
+        for base in SkillScanner.projectBases(from: root, io: LocalHostIO()) {
             let logical = locationLabel(base: base, root: root)
             for h in McpHarness.allCases {
                 feeds.append(Feed(logicalLocation: logical, harness: h,
@@ -62,7 +62,7 @@ enum McpScanner {
         if global {
             for h in McpHarness.allCases { locations += McpConfigDescriptor.globalLocations(h) }
         } else if let root {
-            for base in SkillScanner.projectBases(from: root) {
+            for base in SkillScanner.projectBases(from: root, io: LocalHostIO()) {
                 excludedDirs.insert(base.standardizedFileURL.path)
                 for h in McpHarness.allCases { locations += McpConfigDescriptor.projectLocations(h, base: base) }
             }
@@ -136,7 +136,7 @@ enum McpScanner {
 
         // Git status: classify every primary config-file path in one batch.
         let allPaths = byKey.values.flatMap { Array($0.primaryPath.values) }
-        let git = GitStatusService.classify(paths: Array(Set(allPaths)))
+        let git = GitStatusService.classify(paths: Array(Set(allPaths)), io: LocalHostIO())
 
         var servers: [McpServer] = []
         for (key, acc) in byKey {
