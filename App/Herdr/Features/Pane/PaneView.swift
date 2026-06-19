@@ -40,7 +40,8 @@ enum PaneRenderMode: String, CaseIterable {
 /// Screen 3: read a pane's output and send input, rendered as a light terminal.
 /// Output renders in one of three `PaneRenderMode`s (cycle button in the toolbar); an
 /// iSH-style key bar (sticky Ctrl, Esc, arrows) rides above the keyboard. Grid
-/// modes read `pane.read recent` (raw grid); reader reads `recent_unwrapped`.
+/// modes read the raw hard-wrapped grid (`recent`, with history; `visible` for
+/// alt-screen TUIs); reader reads `recent_unwrapped`.
 struct PaneView: View {
     @Environment(SessionModel.self) private var session
     let paneID: PaneID
@@ -95,9 +96,13 @@ struct PaneView: View {
                 } else {
                     let fresh = await session.rawTerminal(for: paneID)
                     if Task.isCancelled { return } // don't clobber a newer pane/mode's grid
-                    gridLines = fresh
-                    // Wait on `recent` so a raw-grid change (e.g. an in-place TUI
-                    // redraw) wakes us even when the unwrapped scrollback is unchanged.
+                    // Keep the last good grid only on a read *failure* (nil), as
+                    // Reader does via its `outputs[pane]` fallback — but let a
+                    // genuinely empty screen through so a cleared pane isn't pinned.
+                    if let fresh { gridLines = fresh }
+                    // Wait on `recent` — the source the grid now reads — so new
+                    // scrollback wakes us. (Alt-screen panes, served from `visible`,
+                    // just fall back to the wait's timeout poll.)
                     await session.awaitOutput(for: paneID, source: PaneReadSource.recent)
                 }
             }
@@ -172,10 +177,14 @@ struct PaneView: View {
             // (width 2) would under-count and overflow slightly. Agent TUIs are
             // overwhelmingly width-1 box/ASCII; add a wcwidth pass if that breaks.
             let cols = max(1, gridLines.map { TerminalText.stripANSI($0).count }.max() ?? 1)
-            let size = max(5, min(15, (geo.size.width - 28) * 0.97 / (Double(cols) * monoAdvance)))
+            // Floor at 4pt (not 5) so a ~124-col agent grid fits the width fully
+            // instead of clipping its last chars — small is the point of Fit.
+            let size = max(4, min(15, (geo.size.width - 28) * 0.97 / (Double(cols) * monoAdvance)))
             ScrollViewReader { proxy in
                 ScrollView(.vertical) {
-                    LazyVStack(alignment: .leading, spacing: 0) {
+                    // Eager VStack — the grid is bounded (a few hundred rows at
+                    // most) so lazy layout buys nothing and complicates sizing.
+                    VStack(alignment: .leading, spacing: 0) {
                         gridPlaceholder
                         ForEach(Array(gridLines.enumerated()), id: \.offset) { _, line in
                             // One uniform size for every row keeps columns aligned —
@@ -202,8 +211,10 @@ struct PaneView: View {
     /// the faithful terminal view (what the agent's screen literally looks like).
     private var scrollGrid: some View {
         ScrollView([.vertical, .horizontal]) {
-            // spacing 0 so multi-row ANSI backgrounds tile without surface gaps.
-            LazyVStack(alignment: .leading, spacing: 0) {
+            // Eager VStack, spacing 0 so multi-row ANSI backgrounds tile without
+            // gaps. (LazyVStack also mis-measures width inside a two-axis
+            // ScrollView, so eager is the safe choice here regardless.)
+            VStack(alignment: .leading, spacing: 0) {
                 gridPlaceholder
                 ForEach(Array(gridLines.enumerated()), id: \.offset) { _, line in
                     Text(line.ansiAttributed(defaultColor: Theme.terminalText, surface: Theme.terminalBG))

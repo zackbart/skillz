@@ -23,6 +23,8 @@ public enum Method {
 
 /// Valid `source` values for `pane.read`.
 public enum PaneReadSource {
+    /// The live on-screen grid, including alternate-screen TUIs (agent UIs).
+    public static let visible = "visible"
     public static let recent = "recent"
     public static let recentUnwrapped = "recent_unwrapped"
     public static let detection = "detection"

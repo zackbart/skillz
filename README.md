@@ -4,6 +4,10 @@
 
 <h1 align="center">Herdr iOS</h1>
 
+<p align="center">
+  <a href="https://testflight.apple.com/join/D6vMaWPq"><strong>Join the TestFlight beta →</strong></a>
+</p>
+
 A native iOS (SwiftUI) client for [Herdr](https://herdr.dev), the terminal-native
 **agent multiplexer**. Browse your workspaces, watch live agent status, and read
 or drive any pane from your phone.

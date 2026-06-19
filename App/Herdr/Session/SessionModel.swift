@@ -88,9 +88,11 @@ final class SessionModel {
         }
     }
 
-    /// The exact terminal grid for a pane, for the Raw inspector (uncleaned).
-    func rawTerminal(for pane: PaneID) async -> [String] {
-        (try? await client.readRawTerminal(pane)) ?? []
+    /// The raw terminal grid for a pane (uncleaned), for the Fit/Scroll modes.
+    /// Returns `nil` on a read failure so the caller can keep its last grid, vs.
+    /// an empty array for a genuinely blank screen.
+    func rawTerminal(for pane: PaneID) async -> [String]? {
+        try? await client.readRawTerminal(pane)
     }
 
     /// Submit a line of input (text + Enter), echoing it optimistically.

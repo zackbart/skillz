@@ -109,4 +109,32 @@ final class ClientTests: XCTestCase {
             XCTAssertEqual(error.code, "not_found")
         }
     }
+
+    /// Regression: grid rows arrive CRLF-terminated, and Swift fuses "\r\n" into
+    /// one grapheme, so a Character-level `split(separator: "\n")` collapses the
+    /// whole screen into a single line. `readRawTerminal` must split on the LF
+    /// scalar and return one entry per row. (The Mock uses LF only, so it can't
+    /// catch this — hence the dedicated CRLF transport.)
+    func testReadRawTerminalSplitsCRLFRows() async throws {
+        let client = HerdrClient(transport: CRLFTransport(text: "row one\r\nrow two\r\nrow three\r\n"))
+        try await client.connect()
+        let lines = try await client.readRawTerminal("1-1")
+        XCTAssertEqual(lines, ["row one", "row two", "row three"])
+    }
+}
+
+/// Minimal transport that answers every `pane.read` with a fixed CRLF body.
+private struct CRLFTransport: HerdrTransport {
+    let text: String
+    func connect() async throws {}
+    func disconnect() async {}
+    func request(_ request: RPCRequest) async throws -> RPCResponse {
+        RPCResponse(id: request.id, result: .object([
+            "type": .string("pane_read"),
+            "read": .object(["text": .string(text), "format": .string("text")]),
+        ]), error: nil)
+    }
+    func events(_ subscribeRequest: RPCRequest) -> AsyncStream<IncomingMessage> {
+        AsyncStream { $0.finish() }
+    }
 }

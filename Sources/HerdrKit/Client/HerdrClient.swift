@@ -89,12 +89,18 @@ public actor HerdrClient {
                             format: PaneReadFormat.ansi, stripAnsi: false)
     }
 
-    /// Read the exact terminal grid (`recent`, hard-wrapped to the server width).
-    /// Backs the Fit/Scroll grid modes; the Reader mode uses `readPane`. ANSI is
-    /// kept so the UI can render fg/bg/inverse cells (e.g. an agent's logo).
+    /// Read the terminal grid hard-wrapped to the server width — backs the
+    /// Fit/Scroll modes (Reader uses `readPane`). Prefers `recent` (the full
+    /// scrollback) so the grid modes can scroll back through history, and falls
+    /// back to `visible` (the live on-screen grid) for alternate-screen TUIs,
+    /// whose scrollback is empty. ANSI is kept so the UI can render fg/bg/inverse
+    /// cells (e.g. an agent's logo).
     public func readRawTerminal(_ pane: PaneID, lines: Int = 500) async throws -> [String] {
-        try await readLines(pane, source: PaneReadSource.recent, lines: lines,
-                            format: PaneReadFormat.ansi, stripAnsi: false)
+        let recent = try await readLines(pane, source: PaneReadSource.recent, lines: lines,
+                                         format: PaneReadFormat.ansi, stripAnsi: false)
+        if !recent.isEmpty { return recent }
+        return try await readLines(pane, source: PaneReadSource.visible, lines: lines,
+                                   format: PaneReadFormat.ansi, stripAnsi: false)
     }
 
     private func readLines(_ pane: PaneID, source: String, lines: Int?,
@@ -108,9 +114,15 @@ public actor HerdrClient {
         if let stripAnsi { params["strip_ansi"] = .bool(stripAnsi) }
         let result = try await call(Method.paneRead, .object(params))
         guard let text = try result.decodedSnake(PaneReadResult.self).read.text else { return [] }
-        var split = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-        // Grid rows arrive CRLF-terminated when ANSI isn't stripped — drop the CR
-        // so it doesn't leak into rendering or inflate the fit-mode width count.
+        // Split on the LF unicode scalar, NOT `text.split(separator: "\n")`:
+        // grid rows arrive CRLF-terminated, and Swift fuses "\r\n" into a single
+        // grapheme, so a Character-level split on "\n" never matches and collapses
+        // the whole grid into one 1800-char line (the bug behind blank grid modes).
+        var split = text.unicodeScalars
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .map { String(String.UnicodeScalarView($0)) }
+        // Drop the CR left on each row by the CRLF terminator so it doesn't leak
+        // into rendering or inflate the fit-mode width count.
         for i in split.indices where split[i].hasSuffix("\r") { split[i].removeLast() }
         if split.last == "" { split.removeLast() } // drop the artifact of a trailing newline
         return split
