@@ -8,6 +8,24 @@ struct WorkspaceDetailView: View {
     @Environment(SessionModel.self) private var session
     let workspaceID: WorkspaceID
     @State private var showingNewTab = false
+    @State private var pendingClose: PendingClose?
+
+    /// A tab or pane queued for a confirmed close (both routed through one dialog).
+    private enum PendingClose: Identifiable {
+        case tab(HerdrKit.Tab), pane(Pane)
+        var id: String {
+            switch self {
+            case .tab(let t): return "t-\(t.id.rawValue)"
+            case .pane(let p): return "p-\(p.id.rawValue)"
+            }
+        }
+        var label: String {
+            switch self {
+            case .tab(let t): return t.label
+            case .pane(let p): return p.title
+            }
+        }
+    }
 
     private var workspace: Workspace? { session.workspace(workspaceID) }
 
@@ -21,11 +39,38 @@ struct WorkspaceDetailView: View {
                                 NavigationLink(value: pane.id) {
                                     PaneRow(pane: pane)
                                 }
+                                .swipeActions(edge: .trailing) {
+                                    Button(role: .destructive) { pendingClose = .pane(pane) } label: {
+                                        Label("Close", systemImage: "xmark")
+                                    }
+                                }
                             }
                         } header: {
                             SectionEyebrow(tab.label)
+                                .contextMenu {
+                                    Button(role: .destructive) { pendingClose = .tab(tab) } label: {
+                                        Label("Close tab", systemImage: "xmark")
+                                    }
+                                }
                         }
                     }
+                }
+                .confirmationDialog(
+                    "Close “\(pendingClose?.label ?? "")”?",
+                    isPresented: Binding(get: { pendingClose != nil }, set: { if !$0 { pendingClose = nil } }),
+                    titleVisibility: .visible,
+                    presenting: pendingClose
+                ) { target in
+                    Button("Close", role: .destructive) {
+                        Task {
+                            switch target {
+                            case .tab(let t): await session.closeTab(t.id)
+                            case .pane(let p): await session.closePane(p.id)
+                            }
+                        }
+                    }
+                } message: { _ in
+                    Text("This kills the running terminal process.")
                 }
                 .navigationTitle(workspace.label)
                 .navigationBarTitleDisplayMode(.inline)

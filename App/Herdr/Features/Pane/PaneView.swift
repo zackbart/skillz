@@ -49,8 +49,15 @@ struct PaneView: View {
     @State private var input: String = ""
     @State private var ctrlActive = false
     @AppStorage("paneRenderMode") private var mode: PaneRenderMode = .fit
+    /// Readable font size for Scroll/Reader modes (Fit auto-sizes, so it's exempt).
+    @AppStorage("paneFontSize") private var fontSize: Double = 13
     /// Raw terminal grid lines for the `fit`/`scroll` modes (uncleaned `recent`).
     @State private var gridLines: [String] = []
+    /// Whether the scroll view is parked near the bottom — gates auto-stick so new
+    /// output doesn't yank the user off history they've scrolled up to read.
+    @State private var isPinned = true
+    /// Bumped on every accepted key/send to drive one-shot haptic feedback.
+    @State private var hapticTick = 0
     @FocusState private var inputFocused: Bool
 
     private var pane: Pane? { session.pane(paneID) }
@@ -72,10 +79,12 @@ struct PaneView: View {
             inputBar
         }
         .background(Theme.terminalBG, ignoresSafeAreaEdges: .bottom)
+        .sensoryFeedback(.impact(weight: .light), trigger: hapticTick)
         .navigationTitle(pane?.title ?? paneID.rawValue)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
+                if mode != .fit { fontSizeButtons }
                 modeButton
                 if let pane, pane.isAgent {
                     StatusTag(status: pane.status)
@@ -128,6 +137,34 @@ struct PaneView: View {
         .accessibilityLabel("Layout: \(mode.label). Tap to change.")
     }
 
+    /// A−/A+ pair for the Scroll/Reader font, clamped to a legible range.
+    private var fontSizeButtons: some View {
+        HStack(spacing: 2) {
+            Button { fontSize = max(9, fontSize - 1) } label: { Image(systemName: "textformat.size.smaller") }
+                .disabled(fontSize <= 9)
+                .accessibilityLabel("Smaller text")
+            Button { fontSize = min(22, fontSize + 1) } label: { Image(systemName: "textformat.size.larger") }
+                .disabled(fontSize >= 22)
+                .accessibilityLabel("Larger text")
+        }
+        .tint(Theme.prompt)
+    }
+
+    /// The user-sized monospace face for Scroll/Reader.
+    private var paneFont: Font { .system(size: fontSize, design: .monospaced) }
+
+    /// Background probe: the content's bottom edge sits at/above the viewport
+    /// bottom (plus an 80pt slack) ⇒ we're pinned. Lives in `.background` so it's
+    /// always measured regardless of lazy realization.
+    private func pinReader(viewportHeight: CGFloat) -> some View {
+        GeometryReader { geo in
+            Color.clear.preference(
+                key: PinnedToBottomKey.self,
+                value: geo.frame(in: .named(scrollSpace)).maxY <= viewportHeight + 80
+            )
+        }
+    }
+
     @ViewBuilder private var content: some View {
         switch mode {
         case .fit: fitGrid
@@ -137,32 +174,37 @@ struct PaneView: View {
     }
 
     private var scrollback: some View {
-        ScrollViewReader { proxy in
-            // Mobile transcript: cleaned output (frames stripped) wraps
-            // vertically — no horizontal scroll. Color preserved.
-            ScrollView(.vertical) {
-                LazyVStack(alignment: .leading, spacing: 4) {
-                    if lines.isEmpty {
-                        Text("— no output yet —")
-                            .font(Theme.monospaced)
-                            .foregroundStyle(Theme.terminalDim)
+        GeometryReader { geo in
+            ScrollViewReader { proxy in
+                // Mobile transcript: cleaned output (frames stripped) wraps
+                // vertically — no horizontal scroll. Color preserved.
+                ScrollView(.vertical) {
+                    LazyVStack(alignment: .leading, spacing: 4) {
+                        if lines.isEmpty {
+                            Text("— no output yet —")
+                                .font(paneFont)
+                                .foregroundStyle(Theme.terminalDim)
+                        }
+                        ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
+                            Text(line.ansiAttributed(defaultColor: Theme.terminalText, surface: Theme.terminalBG))
+                                .font(paneFont)
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        Color.clear.frame(height: 1).id(bottomAnchor)
                     }
-                    ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
-                        Text(line.ansiAttributed(defaultColor: Theme.terminalText, surface: Theme.terminalBG))
-                            .font(Theme.monospaced)
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    Color.clear.frame(height: 1).id(bottomAnchor)
+                    .padding(14)
+                    .background(pinReader(viewportHeight: geo.size.height))
                 }
-                .padding(14)
+                .background(Theme.terminalBG)
+                .coordinateSpace(.named(scrollSpace))
+                .onPreferenceChange(PinnedToBottomKey.self) { isPinned = $0 }
+                .onChange(of: lines.count) {
+                    if isPinned { withAnimation { proxy.scrollTo(bottomAnchor, anchor: .bottom) } }
+                }
+                .onAppear { proxy.scrollTo(bottomAnchor, anchor: .bottom) }
             }
-            .background(Theme.terminalBG)
-            .onChange(of: lines.count) {
-                withAnimation { proxy.scrollTo(bottomAnchor, anchor: .bottom) }
-            }
-            .onAppear { proxy.scrollTo(bottomAnchor, anchor: .bottom) }
         }
     }
 
@@ -198,9 +240,12 @@ struct PaneView: View {
                         Color.clear.frame(height: 1).id(bottomAnchor)
                     }
                     .padding(14)
+                    .background(pinReader(viewportHeight: geo.size.height))
                 }
+                .coordinateSpace(.named(scrollSpace))
+                .onPreferenceChange(PinnedToBottomKey.self) { isPinned = $0 }
                 .onChange(of: gridLines.count) {
-                    withAnimation { proxy.scrollTo(bottomAnchor, anchor: .bottom) }
+                    if isPinned { withAnimation { proxy.scrollTo(bottomAnchor, anchor: .bottom) } }
                 }
             }
         }
@@ -218,7 +263,7 @@ struct PaneView: View {
                 gridPlaceholder
                 ForEach(Array(gridLines.enumerated()), id: \.offset) { _, line in
                     Text(line.ansiAttributed(defaultColor: Theme.terminalText, surface: Theme.terminalBG))
-                        .font(Theme.monospaced)
+                        .font(paneFont)
                         .textSelection(.enabled)
                         .lineLimit(1)
                         .fixedSize(horizontal: true, vertical: false)
@@ -320,11 +365,13 @@ struct PaneView: View {
     }
 
     private let bottomAnchor = "herdr.pane.bottom"
+    private let scrollSpace = "herdr.pane.scroll"
 
     /// Send a bar key, applying a pending sticky Ctrl as `ctrl+<key>`.
     private func sendBarKey(_ key: String) {
         let resolved = ctrlActive ? "ctrl+\(key.lowercased())" : key
         ctrlActive = false
+        hapticTick += 1
         Task { await session.sendKeys(resolved, to: paneID) }
     }
 
@@ -338,6 +385,7 @@ struct PaneView: View {
         }
         ctrlActive = false
         input = String(new.dropLast())
+        hapticTick += 1
         let combo = "ctrl+\(String(ch).lowercased())"
         Task { await session.sendKeys(combo, to: paneID) }
     }
@@ -345,8 +393,17 @@ struct PaneView: View {
     private func send() {
         let text = input
         input = ""
+        hapticTick += 1
         Task { await session.submit(text, to: paneID) }
     }
+}
+
+/// Reports whether a vertical scroll view is parked near its bottom. Read from a
+/// `.background` GeometryReader (always laid out, unlike a lazy child sentinel) so
+/// it stays correct even when the bottom row is recycled out of a `LazyVStack`.
+private struct PinnedToBottomKey: PreferenceKey {
+    static let defaultValue = true
+    static func reduce(value: inout Bool, nextValue: () -> Bool) { value = nextValue() }
 }
 
 extension String {

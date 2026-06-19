@@ -16,8 +16,16 @@ final class SessionModel {
     var outputs: [PaneID: [String]] = [:]
     var loadError: String?
 
+    /// Health of the link to the server, derived from whether RPCs are landing.
+    /// Drives the toolbar indicator; `.lost` kicks off a backoff reconnect loop.
+    enum LinkState { case live, lost }
+    private(set) var link: LinkState = .live
+
     private var eventTask: Task<Void, Never>?
     private var refreshTask: Task<Void, Never>?
+    private var reconnectTask: Task<Void, Never>?
+    /// Last status seen per pane, so we only notify on the edge *into* blocked.
+    private var lastStatus: [PaneID: AgentStatus] = [:]
     private var subscribedTopology = false
     private var subscribedPanes: Set<PaneID> = []
 
@@ -59,8 +67,37 @@ final class SessionModel {
         do {
             workspaces = try await client.listWorkspaces()
             loadError = nil
+            link = .live
+            // Seed the baseline from the listing so the first status *event* for a
+            // pane notifies only on a real change, not the initial sync.
+            for pane in workspaces.flatMap(\.panes) { lastStatus[pane.id] = pane.status }
+            reconnectTask?.cancel()
+            reconnectTask = nil
         } catch {
             loadError = String(describing: error)
+            link = .lost
+            scheduleReconnect()
+        }
+    }
+
+    /// Manual "tap the dot to retry now" — just re-runs the listing.
+    func reconnect() async { await refresh() }
+
+    /// While the link is lost, keep retrying the listing on an exponential
+    /// backoff (capped) until one succeeds — a successful `refresh` cancels us.
+    /// ponytail: re-lists over the existing transport; an SSH session that has
+    /// actually dropped is re-established by the transport on its next request.
+    private func scheduleReconnect() {
+        guard reconnectTask == nil else { return }
+        reconnectTask = Task { [weak self] in
+            var delay: Duration = .seconds(2)
+            while !Task.isCancelled {
+                try? await Task.sleep(for: delay)
+                guard !Task.isCancelled else { return }
+                await self?.refresh()
+                if self?.link == .live { return }
+                delay = min(delay * 2, .seconds(30))
+            }
         }
     }
 
@@ -126,6 +163,30 @@ final class SessionModel {
         return id
     }
 
+    /// Close a workspace/tab/pane, then re-list. Optimistically drops it from the
+    /// tree first so the row disappears immediately; the refresh reconciles (and
+    /// the `*.closed` topology event would anyway). Best-effort — a failed close
+    /// is surfaced by the next refresh putting it back.
+    func closeWorkspace(_ id: WorkspaceID) async {
+        workspaces.removeAll { $0.id == id }
+        try? await client.closeWorkspace(id)
+        await refresh()
+    }
+
+    func closeTab(_ id: TabID) async {
+        for w in workspaces.indices { workspaces[w].tabs.removeAll { $0.id == id } }
+        try? await client.closeTab(id)
+        await refresh()
+    }
+
+    func closePane(_ id: PaneID) async {
+        for w in workspaces.indices {
+            for t in workspaces[w].tabs.indices { workspaces[w].tabs[t].panes.removeAll { $0.id == id } }
+        }
+        try? await client.closePane(id)
+        await refresh()
+    }
+
     // MARK: Lookups
 
     func workspace(_ id: WorkspaceID) -> Workspace? {
@@ -170,11 +231,18 @@ final class SessionModel {
     }
 
     private func updateStatus(_ status: AgentStatus, for paneID: PaneID) {
+        let previous = lastStatus[paneID]
+        lastStatus[paneID] = status
         for w in workspaces.indices {
             for t in workspaces[w].tabs.indices {
                 for p in workspaces[w].tabs[t].panes.indices
                 where workspaces[w].tabs[t].panes[p].id == paneID {
                     workspaces[w].tabs[t].panes[p].status = status
+                    if status == .blocked, previous != .blocked {
+                        let pane = workspaces[w].tabs[t].panes[p]
+                        AgentNotifier.notifyBlocked(agent: pane.agent ?? pane.title,
+                                                    workspace: workspaces[w].label)
+                    }
                 }
             }
         }

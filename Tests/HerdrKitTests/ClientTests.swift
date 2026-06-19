@@ -110,6 +110,33 @@ final class ClientTests: XCTestCase {
         }
     }
 
+    /// `pane.close` drops the pane, and an emptied tab/workspace is pruned with
+    /// it — so closing the only pane removes the whole workspace from the list.
+    func testClosePanePrunesEmptyTabAndWorkspace() async throws {
+        let client = HerdrClient(transport: MockTransport(tickInterval: .seconds(3600)))
+        try await client.connect()
+
+        // "infra" has a single tab with a single pane — closing it empties both.
+        let infra = try await client.listWorkspaces().first { $0.label == "infra" }
+        let onlyPane = try XCTUnwrap(infra?.tabs.first?.panes.first)
+        try await client.closePane(onlyPane.id)
+
+        let after = try await client.listWorkspaces()
+        XCTAssertNil(after.first { $0.label == "infra" }, "an emptied workspace is pruned")
+    }
+
+    /// `workspace.close` removes the whole workspace.
+    func testCloseWorkspaceRemovesIt() async throws {
+        let client = HerdrClient(transport: MockTransport(tickInterval: .seconds(3600)))
+        try await client.connect()
+        let first = try await client.listWorkspaces().first
+        let target = try XCTUnwrap(first)
+        try await client.closeWorkspace(target.id)
+
+        let after = try await client.listWorkspaces()
+        XCTAssertNil(after.first { $0.id == target.id })
+    }
+
     /// Regression: grid rows arrive CRLF-terminated, and Swift fuses "\r\n" into
     /// one grapheme, so a Character-level `split(separator: "\n")` collapses the
     /// whole screen into a single line. `readRawTerminal` must split on the LF

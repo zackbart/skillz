@@ -7,9 +7,12 @@ public enum Method {
 
     public static let workspaceList = "workspace.list"
     public static let workspaceCreate = "workspace.create"
+    public static let workspaceClose = "workspace.close"
     public static let tabList = "tab.list"
     public static let tabCreate = "tab.create"
+    public static let tabClose = "tab.close"
     public static let paneList = "pane.list"
+    public static let paneClose = "pane.close"
     public static let agentList = "agent.list"
 
     public static let paneRead = "pane.read"

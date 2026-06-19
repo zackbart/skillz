@@ -8,6 +8,8 @@ struct WorkspaceListView: View {
     @Environment(AppModel.self) private var app
     @State private var path = NavigationPath()
     @State private var showingNewWorkspace = false
+    @State private var pendingClose: Workspace?
+    @AppStorage(AgentNotifier.enabledKey) private var notify = false
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -21,7 +23,24 @@ struct WorkspaceListView: View {
                     NavigationLink(value: workspace.id) {
                         WorkspaceRow(workspace: workspace)
                     }
+                    .swipeActions(edge: .trailing) {
+                        Button(role: .destructive) { pendingClose = workspace } label: {
+                            Label("Close", systemImage: "xmark")
+                        }
+                    }
                 }
+            }
+            .confirmationDialog(
+                "Close “\(pendingClose?.label ?? "")”?",
+                isPresented: Binding(get: { pendingClose != nil }, set: { if !$0 { pendingClose = nil } }),
+                titleVisibility: .visible,
+                presenting: pendingClose
+            ) { workspace in
+                Button("Close workspace", role: .destructive) {
+                    Task { await session.closeWorkspace(workspace.id) }
+                }
+            } message: { _ in
+                Text("This kills every terminal and agent running in the workspace.")
             }
             .navigationDestination(for: WorkspaceID.self) { id in
                 WorkspaceDetailView(workspaceID: id)
@@ -49,6 +68,13 @@ struct WorkspaceListView: View {
                     .accessibilityLabel("Disconnect")
                 }
                 ToolbarItem(placement: .primaryAction) {
+                    Button { toggleNotify() } label: {
+                        Image(systemName: notify ? "bell.fill" : "bell.slash")
+                    }
+                    .tint(notify ? Theme.prompt : Theme.ink)
+                    .accessibilityLabel(notify ? "Blocked-agent alerts on" : "Blocked-agent alerts off")
+                }
+                ToolbarItem(placement: .primaryAction) {
                     Button { showingNewWorkspace = true } label: { Image(systemName: "plus") }
                         .tint(Theme.ink)
                         .accessibilityLabel("New workspace")
@@ -56,18 +82,33 @@ struct WorkspaceListView: View {
                 ToolbarItem(placement: .principal) {
                     VStack(spacing: 2) {
                         Text("Workspaces").font(.headline)
-                        HStack(spacing: 5) {
-                            StatusDot(status: .idle, size: 6)
-                            Text(session.label)
-                                .font(Theme.mono(10))
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
+                        Button { Task { await session.reconnect() } } label: {
+                            HStack(spacing: 5) {
+                                Circle()
+                                    .fill(session.link == .live ? Theme.idle : Theme.blocked)
+                                    .frame(width: 6, height: 6)
+                                Text(session.link == .live ? session.label : "Reconnecting…")
+                                    .font(Theme.mono(10))
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
                         }
+                        .buttonStyle(.plain)
+                        .disabled(session.link == .live)
+                        .accessibilityLabel(session.link == .live
+                            ? "Connected to \(session.label)" : "Connection lost. Tap to retry.")
                     }
                 }
             }
         }
         .tint(Theme.prompt)
+    }
+
+    /// Flip the alerts pref. Turning on requests system authorization and only
+    /// sticks if granted, so the toggle never lies about whether alerts can fire.
+    private func toggleNotify() {
+        if notify { notify = false; return }
+        Task { notify = await AgentNotifier.requestAuthorization() }
     }
 }
 

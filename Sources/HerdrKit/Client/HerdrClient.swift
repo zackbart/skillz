@@ -202,6 +202,24 @@ public actor HerdrClient {
         return Self.extractID(result, idKey: "tab_id", nested: "tab").map { TabID($0) }
     }
 
+    /// Close a workspace (and everything in it). Fire-and-forget: the tree
+    /// re-lists via the `workspace.closed` topology event (and the caller's
+    /// explicit refresh). Closing kills the live processes inside — the UI
+    /// confirms before calling this.
+    public func closeWorkspace(_ id: WorkspaceID) async throws {
+        _ = try await call(Method.workspaceClose, .object(["workspace_id": .string(id.rawValue)]))
+    }
+
+    /// Close a single tab within a workspace.
+    public func closeTab(_ id: TabID) async throws {
+        _ = try await call(Method.tabClose, .object(["tab_id": .string(id.rawValue)]))
+    }
+
+    /// Close a single pane (terminal process).
+    public func closePane(_ id: PaneID) async throws {
+        _ = try await call(Method.paneClose, .object(["pane_id": .string(id.rawValue)]))
+    }
+
     /// Pull a created resource's id out of a create result, tolerating the shapes
     /// Herdr might use: a top-level `<thing>_id`, a nested `{"<thing>":{…}}`
     /// (mirroring `*.get`'s `{"type":"pane_info","pane":{…}}`), or a bare `id`.

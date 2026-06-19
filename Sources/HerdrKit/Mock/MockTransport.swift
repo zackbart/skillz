@@ -193,6 +193,26 @@ public actor MockTransport: HerdrTransport {
                 "label": .string(label),
             ])])
 
+        case Method.workspaceClose:
+            let id = request.params["workspace_id"]?.stringValue
+            workspaces.removeAll { $0.id.rawValue == id }
+            result = .object(["type": .string("ok")])
+
+        case Method.tabClose:
+            let id = request.params["tab_id"]?.stringValue
+            for i in workspaces.indices { workspaces[i].tabs.removeAll { $0.id.rawValue == id } }
+            workspaces.removeAll { $0.tabs.isEmpty } // a workspace with no tabs is gone
+            result = .object(["type": .string("ok")])
+
+        case Method.paneClose:
+            let id = request.params["pane_id"]?.stringValue
+            for w in workspaces.indices {
+                for t in workspaces[w].tabs.indices { workspaces[w].tabs[t].panes.removeAll { $0.id.rawValue == id } }
+                workspaces[w].tabs.removeAll { $0.panes.isEmpty }
+            }
+            workspaces.removeAll { $0.tabs.isEmpty }
+            result = .object(["type": .string("ok")])
+
         default:
             // send_text / send_keys / ping and anything else: ack.
             result = .object(["type": .string("ok")])
