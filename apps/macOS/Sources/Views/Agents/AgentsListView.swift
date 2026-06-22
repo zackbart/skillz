@@ -18,9 +18,15 @@ struct AgentsListView: View {
                                        description: Text(status))
             }
         }
-        // The shared list toolbar (SkillListView) provides Refresh via state.reload(),
-        // which fans out to model.refresh() for the Agents axis.
-        .task { if model.panes.isEmpty { await model.refresh() } }
+        // Poll topology while the list is on screen so panes appear/vanish on
+        // their own; .task cancels the loop on disappear. Toolbar Refresh still works.
+        // ponytail: 2s poll, swap for Herdr's event stream if it feels laggy/chatty.
+        .task {
+            while !Task.isCancelled {
+                await model.refresh()
+                try? await Task.sleep(for: .seconds(2))
+            }
+        }
     }
 
     /// Drive List selection through the model; on change, resolve the transcript.

@@ -27,22 +27,19 @@ final class AgentsSessionModel: ObservableObject {
     private var transcriptURL: URL?
     private var watcher: FileWatcher?
 
-    /// Re-list the live panes. Errors land in `status`.
+    /// Re-list the live panes. Errors land in `status`. The selected pane's
+    /// transcript stays live via its file watcher — no re-select needed here.
+    /// Called on a poll loop by AgentsListView, so panes stay fresh on their own.
     func refresh() async {
         do {
             let listed = try await client.listAgents()
-            panes = listed
+            if listed != panes { panes = listed }   // avoid needless list churn
             status = listed.isEmpty ? "No live agent panes." : nil
-            // Drop a selection whose pane vanished; otherwise reload its transcript
-            // so Refresh actually shows new content (no live subscription yet).
-            if let sel = selectedPaneID {
-                if let pane = listed.first(where: { $0.paneID == sel }) {
-                    await select(pane)
-                } else {
-                    selectedPaneID = nil
-                    blocks = []
-                    stopWatching()
-                }
+            // Drop a selection whose pane vanished.
+            if let sel = selectedPaneID, !listed.contains(where: { $0.paneID == sel }) {
+                selectedPaneID = nil
+                blocks = []
+                stopWatching()
             }
         } catch {
             status = "Couldn’t reach Herdr: \(error.localizedDescription)"
