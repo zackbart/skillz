@@ -4,6 +4,20 @@ All notable changes to Loadout are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [0.0.4] - 2026-06-22
+
+### Added
+- **Agents — work in progress.** A new "Agents" segment beside Skills and MCP
+  that talks to the local Herdr socket, lists live agent panes, and renders a
+  selected pane's Claude transcript as a T3 Code–style structured thread:
+  prose-forward messages, a collapsed/expandable tool "work log", inline diffs,
+  and a plan view. Local socket only for now.
+
+### Notes
+- Agents is early and actively evolving — expect rough edges. Still to come:
+  remote machines over SSH, live status updates, the permission/approval flow,
+  timestamps, and the tasks rail.
+
 ## [0.0.3] - 2026-06-19
 
 ### Added

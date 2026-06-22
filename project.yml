@@ -28,8 +28,8 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: dev.zackbart.loadout
-        MARKETING_VERSION: "0.0.3"
-        CURRENT_PROJECT_VERSION: "1"
+        MARKETING_VERSION: "0.0.4"
+        CURRENT_PROJECT_VERSION: "2"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         SWIFT_VERSION: "5.0"
         GENERATE_INFOPLIST_FILE: YES

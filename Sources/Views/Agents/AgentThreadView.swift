@@ -2,9 +2,12 @@ import SwiftUI
 import HerdrKit
 import AgentContentKit
 
-/// Renders a selected pane's transcript as structured blocks, styled to the v2 mockup:
-/// an identity header (agent dot + hash + status pill + chips), structured block cards,
-/// and a visual-only input-bar stub. Presentation only — no behavior/data changes.
+/// Renders a selected pane's transcript as a T3 Code–style thread:
+/// a slim identity bar, a centered prose column where assistant messages are
+/// borderless full-width prose and user messages are right-aligned bubbles, and
+/// tool calls collapsed into a quiet, expandable "work log" of one-line rows.
+/// Plan blocks render inline; a visual-only composer sits at the bottom.
+/// Presentation only — no behavior/data changes.
 struct AgentThreadView: View {
     @ObservedObject var model: AgentsSessionModel
 
@@ -16,11 +19,10 @@ struct AgentThreadView: View {
     var body: some View {
         if let pane = selectedPane {
             VStack(spacing: 0) {
-                header(pane)
+                topBar(pane)
                 Divider()
                 thread(pane)
-                Divider()
-                inputBar(pane)
+                composer(pane)
             }
         } else {
             ContentUnavailableView(
@@ -31,52 +33,45 @@ struct AgentThreadView: View {
         }
     }
 
-    // MARK: - Header (identity)
+    // MARK: - Slim identity bar (T3 top action bar, sans git actions)
 
     @ViewBuilder
-    private func header(_ pane: AgentInfo) -> some View {
-        VStack(alignment: .leading, spacing: 9) {
-            HStack(spacing: 10) {
-                Circle()
-                    .fill(AgentStyle.identityColor(pane.agent))
-                    .frame(width: 13, height: 13)
-                Text(pane.agent ?? "agent")
-                    .font(.largeTitle).fontWeight(.bold)
-                Text("#\(pane.paneID.rawValue)")
-                    .font(.largeTitle).fontWeight(.semibold)
-                    .foregroundStyle(.secondary)
+    private func topBar(_ pane: AgentInfo) -> some View {
+        HStack(spacing: 9) {
+            Circle()
+                .fill(AgentStyle.identityColor(pane.agent))
+                .frame(width: 11, height: 11)
+            Text(pane.agent ?? "agent")
+                .font(.system(size: 15, weight: .semibold))
+            Text("#\(pane.paneID.rawValue)")
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(.secondary)
+            statusPill(pane.status)
+            Spacer(minLength: 8)
+            if let cwd = pane.cwd ?? pane.foregroundCwd {
+                chip(key: "cwd", value: AgentStyle.shortCwd(cwd))
             }
-            FlowRow(spacing: 8) {
-                statusPill(pane.status)
-                if let cwd = pane.cwd ?? pane.foregroundCwd {
-                    chip(key: "cwd", value: AgentStyle.shortCwd(cwd))
-                }
-                if let uuid = pane.agentSession?.value, !uuid.isEmpty {
-                    chip(key: "session", value: String(uuid.prefix(8)))
-                    chip(key: "transcript", value: "wired ✓")
-                }
+            if let uuid = pane.agentSession?.value, !uuid.isEmpty {
+                chip(key: "session", value: String(uuid.prefix(8)))
             }
         }
-        .padding(.horizontal, 24)
-        .padding(.top, 18)
-        .padding(.bottom, 14)
+        .padding(.horizontal, 18)
+        .padding(.vertical, 9)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 
-    /// Status pill: amber for blocked, green for working, gray otherwise (mockup `.pill`).
     private func statusPill(_ status: AgentStatus) -> some View {
         let color = AgentStyle.statusColor(status)
-        return HStack(spacing: 6) {
-            Circle().fill(color).frame(width: 7, height: 7)
+        return HStack(spacing: 5) {
+            Circle().fill(color).frame(width: 6, height: 6)
             Text(AgentStyle.statusLabel(status).capitalized)
                 .font(.system(size: 11, weight: .semibold))
         }
-        .padding(.horizontal, 9).padding(.vertical, 3)
+        .padding(.horizontal, 8).padding(.vertical, 2.5)
         .background(color.opacity(0.16), in: Capsule())
         .foregroundStyle(color)
     }
 
-    /// Mono key/value chip (mockup `.chip`).
     private func chip(key: String, value: String) -> some View {
         HStack(spacing: 5) {
             Text(key).foregroundStyle(.tertiary)
@@ -88,122 +83,178 @@ struct AgentThreadView: View {
         .overlay(RoundedRectangle(cornerRadius: 7).strokeBorder(.quaternary))
     }
 
-    // MARK: - Thread (blocks)
+    // MARK: - Thread (centered prose column)
 
     @ViewBuilder
     private func thread(_ pane: AgentInfo) -> some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
-                if let status = model.status, model.blocks.isEmpty {
-                    ContentUnavailableView(
-                        "Nothing to show",
-                        systemImage: "doc.text.magnifyingglass",
-                        description: Text(status)
-                    )
-                    .frame(maxWidth: .infinity)
-                    .padding(.top, 40)
-                } else {
-                    ForEach(Array(model.blocks.enumerated()), id: \.offset) { _, block in
-                        BlockView(block: block, agentName: pane.agent)
+            if model.blocks.isEmpty {
+                ContentUnavailableView(
+                    "Nothing to show",
+                    systemImage: "doc.text.magnifyingglass",
+                    description: Text(model.status ?? "Transcript is empty.")
+                )
+                .frame(maxWidth: .infinity).padding(.top, 48)
+            } else {
+                LazyVStack(alignment: .leading, spacing: 16) {
+                    ForEach(items(model.blocks)) { item in
+                        switch item {
+                        case let .message(_, role, text):
+                            MessageRow(role: role, text: text, agentName: pane.agent)
+                        case let .plan(_, planItems):
+                            PlanSection(items: planItems)
+                        case let .workLog(_, blocks):
+                            WorkLogSection(blocks: blocks)
+                        }
                     }
                 }
+                .padding(.horizontal, 22).padding(.vertical, 18)
+                .frame(maxWidth: 680, alignment: .leading)
+                .frame(maxWidth: .infinity)   // center the column
             }
-            .padding(.horizontal, 24)
-            .padding(.vertical, 18)
-            .frame(maxWidth: 820, alignment: .leading)
-            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
-    // MARK: - Input bar (visual stub)
-
-    @ViewBuilder
-    private func inputBar(_ pane: AgentInfo) -> some View {
-        VStack(alignment: .leading, spacing: 7) {
-            HStack(spacing: 9) {
-                Text("›")
-                    .font(.system(size: 13, design: .monospaced))
-                    .foregroundStyle(AgentStyle.identityColor(pane.agent))
-                Text("Message \(pane.agent ?? "agent") #\(pane.paneID.rawValue)…")
-                    .font(.system(size: 13))
-                    .foregroundStyle(.tertiary)
-                Spacer()
-                Text("⏎ send")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.tertiary)
-                    .padding(.horizontal, 8).padding(.vertical, 3)
-                    .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(.quaternary))
-            }
-            .padding(.horizontal, 12).padding(.vertical, 9)
-            .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 9))
-            .overlay(RoundedRectangle(cornerRadius: 9).strokeBorder(.quaternary))
-            HStack(spacing: 15) {
-                keyHint("⌘1–9", "panes")
-                keyHint("⌘↑↓", "workspaces")
-                keyHint("↵", "accept")
-                keyHint("esc", "deny")
-                keyHint("⌘K", "command bar")
+    /// Group the flat block list into thread items, collapsing consecutive
+    /// tool/diff blocks into a single work-log run.
+    private func items(_ blocks: [TranscriptBlock]) -> [ThreadItem] {
+        var out: [ThreadItem] = []
+        var pending: [TranscriptBlock] = []
+        var idx = 0
+        func flush() {
+            guard !pending.isEmpty else { return }
+            out.append(.workLog(id: idx, blocks: pending)); pending = []; idx += 1
+        }
+        for block in blocks {
+            switch block {
+            case let .message(role, text):
+                flush(); out.append(.message(id: idx, role: role, text: text)); idx += 1
+            case let .plan(planItems):
+                flush(); out.append(.plan(id: idx, items: planItems)); idx += 1
+            case .toolCall, .diff:
+                pending.append(block)
             }
         }
-        .padding(.horizontal, 16).padding(.vertical, 9)
+        flush()
+        return out
+    }
+
+    // MARK: - Composer (T3-style, visual stub)
+
+    @ViewBuilder
+    private func composer(_ pane: AgentInfo) -> some View {
+        VStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Ask for follow-up changes…")
+                    .font(.system(size: 14))
+                    .foregroundStyle(.tertiary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.top, 2)
+                HStack(spacing: 8) {
+                    composerPill(icon: "sparkle", "Claude Opus 4.8", chevron: true)
+                    Divider().frame(height: 16)
+                    composerPill(icon: "lock", "Full access", chevron: true)
+                    composerPill(icon: "hammer", "Build")
+                    composerPill(icon: "checklist", "Tasks")
+                    Spacer(minLength: 6)
+                    contextRing
+                    sendButton
+                }
+            }
+            .padding(.horizontal, 14).padding(.top, 12).padding(.bottom, 9)
+            .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 20))
+            .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(.quaternary))
+            .frame(maxWidth: 680)
+            .frame(maxWidth: .infinity)
+        }
+        .padding(.horizontal, 22).padding(.top, 8).padding(.bottom, 12)
         .background(.bar)
     }
 
-    private func keyHint(_ key: String, _ label: String) -> some View {
+    private func composerPill(icon: String, _ label: String, chevron: Bool = false) -> some View {
         HStack(spacing: 5) {
-            Text(key)
-                .font(.system(size: 10, design: .monospaced))
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 5).padding(.vertical, 1)
-                .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 4))
-                .overlay(RoundedRectangle(cornerRadius: 4).strokeBorder(.quaternary))
-            Text(label).font(.system(size: 11)).foregroundStyle(.tertiary)
+            Image(systemName: icon)
+                .font(.system(size: 11))
+                .foregroundStyle(icon == "sparkle" ? AnyShapeStyle(AgentStyle.identityColor("claude")) : AnyShapeStyle(.secondary))
+            Text(label).font(.system(size: 12)).foregroundStyle(.secondary)
+            if chevron {
+                Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold)).foregroundStyle(.tertiary)
+            }
+        }
+        .padding(.horizontal, 8).padding(.vertical, 4)
+        .background(Color.secondary.opacity(0.001), in: RoundedRectangle(cornerRadius: 7))
+    }
+
+    private var contextRing: some View {
+        ZStack {
+            Circle().stroke(Color.secondary.opacity(0.18), lineWidth: 2.5).frame(width: 22, height: 22)
+            Circle().trim(from: 0, to: 0.32)
+                .stroke(Color(hex: 0x1D4ED8), style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                .rotationEffect(.degrees(-90))
+                .frame(width: 22, height: 22)
+            Text("7").font(.system(size: 9, design: .monospaced)).foregroundStyle(.tertiary)
+        }
+    }
+
+    private var sendButton: some View {
+        Image(systemName: "arrow.up")
+            .font(.system(size: 14, weight: .semibold))
+            .foregroundStyle(.white)
+            .frame(width: 30, height: 30)
+            .background(Color(hex: 0x1D4ED8), in: Circle())
+    }
+}
+
+// MARK: - Thread item model
+
+private enum ThreadItem: Identifiable {
+    case message(id: Int, role: String, text: String)
+    case plan(id: Int, items: [PlanItem])
+    case workLog(id: Int, blocks: [TranscriptBlock])
+
+    var id: Int {
+        switch self {
+        case let .message(id, _, _): return id
+        case let .plan(id, _): return id
+        case let .workLog(id, _): return id
         }
     }
 }
 
-/// One transcript block rendered to the mockup's structured language.
-private struct BlockView: View {
-    let block: TranscriptBlock
+// MARK: - Message row (asymmetric: user bubble right, assistant prose left)
+
+private struct MessageRow: View {
+    let role: String
+    let text: String
     let agentName: String?
 
+    private var isUser: Bool { role.lowercased() == "user" }
+
     var body: some View {
-        switch block {
-        case let .message(role, text):
-            messageView(role: role, text: text)
-        case let .toolCall(name, title, detail):
-            toolCard(name: name, title: title, detail: detail)
-        case let .diff(file, lines):
-            diffCard(file: file, lines: lines)
-        case let .plan(items):
-            planCard(items: items)
-        }
-    }
-
-    // MARK: message
-
-    @ViewBuilder
-    private func messageView(role: String, text: String) -> some View {
-        let user = role.lowercased() == "user"
-        let identity = user ? Color(hex: 0x9AA0A6) : AgentStyle.identityColor(agentName)
-        let who = user ? "You" : (agentName.map { $0.capitalized } ?? "Agent")
-        VStack(alignment: .leading, spacing: 7) {
-            HStack(spacing: 7) {
-                RoundedRectangle(cornerRadius: 5).fill(identity).frame(width: 15, height: 15)
-                Text(who.uppercased())
-                    .font(.system(size: 11, weight: .semibold))
-                    .tracking(0.5)
-                    .foregroundStyle(user ? AnyShapeStyle(.tertiary) : AnyShapeStyle(identity))
+        if isUser {
+            HStack {
+                Spacer(minLength: 40)
+                markdown(text)
+                    .font(.system(size: 14))
+                    .foregroundStyle(.primary)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .multilineTextAlignment(.leading)
+                    .padding(.horizontal, 13).padding(.vertical, 10)
+                    .background(Color.secondary.opacity(0.07), in: RoundedRectangle(cornerRadius: 16))
+                    .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(.quaternary))
             }
+        } else {
             markdown(text)
                 .font(.system(size: 14))
-                .foregroundStyle(user ? .secondary : .primary)
+                .foregroundStyle(.primary.opacity(0.82))
                 .textSelection(.enabled)
                 .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .lineSpacing(2)
         }
     }
 
-    /// Render markdown inline, falling back to plain text if it doesn't parse.
     private func markdown(_ text: String) -> Text {
         if let attributed = try? AttributedString(
             markdown: text,
@@ -213,71 +264,137 @@ private struct BlockView: View {
         }
         return Text(text)
     }
+}
 
-    // MARK: tool card
+// MARK: - Work log (collapsed, expandable one-line tool rows)
 
-    @ViewBuilder
-    private func toolCard(name: String, title: String, detail: String?) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 9) {
-                typeTag(name)
-                Text(title)
-                    .font(.system(size: 12, design: .monospaced))
-                    .lineLimit(1).truncationMode(.middle)
-                Spacer()
-            }
-            .padding(.horizontal, 11).padding(.vertical, 8)
-            .background(Color.secondary.opacity(0.03))
-            if let detail, !detail.isEmpty {
-                Divider()
-                Text(detail)
-                    .font(.system(size: 12, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 11).padding(.vertical, 9)
+private struct WorkLogSection: View {
+    let blocks: [TranscriptBlock]
+
+    private var label: String {
+        blocks.count == 1 ? "1 tool call" : "\(blocks.count) tool calls"
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(label)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.tertiary)
+                .padding(.leading, 2).padding(.bottom, 2)
+            ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
+                WorkRow(block: block)
             }
         }
-        .background(RoundedRectangle(cornerRadius: 10).fill(Color.secondary.opacity(0.02)))
-        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(.quaternary))
+    }
+}
+
+private struct WorkRow: View {
+    let block: TranscriptBlock
+    @State private var expanded = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Button {
+                if hasBody { expanded.toggle() }
+            } label: {
+                HStack(spacing: 7) {
+                    Image(systemName: symbol)
+                        .font(.system(size: 12))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 18)
+                    Text(heading)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.primary.opacity(0.82))
+                        .fixedSize()
+                    Text(preview)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1).truncationMode(.middle)
+                    Spacer(minLength: 6)
+                    if hasBody {
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(.tertiary)
+                            .rotationEffect(.degrees(expanded ? 180 : 0))
+                    }
+                }
+                .padding(.horizontal, 5).padding(.vertical, 4)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            if expanded {
+                body(for: block)
+                    .padding(.leading, 11)
+                    .overlay(alignment: .leading) {
+                        Rectangle().fill(.quaternary).frame(width: 1)
+                    }
+                    .padding(.leading, 25)
+                    .padding(.top, 3).padding(.bottom, 6)
+            }
+        }
     }
 
-    private func typeTag(_ name: String) -> some View {
-        Text(name.uppercased())
-            .font(.system(size: 9, weight: .bold))
-            .tracking(0.4)
-            .padding(.horizontal, 6).padding(.vertical, 2)
-            .background(AgentStyle.toolTagColor(name), in: RoundedRectangle(cornerRadius: 5))
-            .foregroundStyle(.white)
+    // Row metadata derived from the block.
+    private var symbol: String {
+        switch block {
+        case let .toolCall(name, _, _): return AgentStyle.toolSymbol(name)
+        case .diff: return "square.and.pencil"
+        default: return "wrench.and.screwdriver"
+        }
     }
-
-    // MARK: diff card
+    private var heading: String {
+        switch block {
+        case let .toolCall(name, _, _): return name
+        case .diff: return "Edit"
+        default: return "Tool"
+        }
+    }
+    private var preview: String {
+        switch block {
+        case let .toolCall(_, title, _): return title
+        case let .diff(file, _): return file
+        default: return ""
+        }
+    }
+    private var hasBody: Bool {
+        switch block {
+        case let .toolCall(_, _, detail): return !(detail ?? "").isEmpty
+        case let .diff(_, lines): return !lines.isEmpty
+        default: return false
+        }
+    }
 
     @ViewBuilder
-    private func diffCard(file: String, lines: [DiffLine]) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 9) {
-                typeTag("Edit")
-                Text(file)
-                    .font(.system(size: 12, design: .monospaced))
-                    .lineLimit(1).truncationMode(.head)
-                Spacer()
+    private func body(for block: TranscriptBlock) -> some View {
+        switch block {
+        case let .toolCall(_, _, detail):
+            if let detail, !detail.isEmpty {
+                ScrollView {
+                    Text(detail)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: 220)
             }
-            .padding(.horizontal, 11).padding(.vertical, 8)
-            .background(Color.secondary.opacity(0.03))
-            Divider()
+        case let .diff(_, lines):
             VStack(alignment: .leading, spacing: 0) {
                 ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
-                    diffRow(line)
+                    DiffRow(line: line)
                 }
             }
-            .padding(.vertical, 5)
+        default:
+            EmptyView()
         }
-        .background(RoundedRectangle(cornerRadius: 10).fill(Color.secondary.opacity(0.02)))
-        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(.quaternary))
     }
+}
 
-    private func diffRow(_ line: DiffLine) -> some View {
+private struct DiffRow: View {
+    let line: DiffLine
+
+    var body: some View {
         let (bg, fg, gutter): (Color, Color, String)
         switch line.kind {
         case .add: (bg, fg, gutter) = (Color(hex: 0x2BA160).opacity(0.10), Color(hex: 0x1A7A47), "+")
@@ -286,43 +403,45 @@ private struct BlockView: View {
         }
         return HStack(spacing: 0) {
             Text(gutter)
-                .frame(width: 24, alignment: .trailing)
+                .frame(width: 18, alignment: .trailing)
                 .foregroundStyle(fg.opacity(0.6))
             Text(line.text)
                 .foregroundStyle(fg)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.leading, 9)
+                .padding(.leading, 8)
         }
-        .font(.system(size: 12, design: .monospaced))
+        .font(.system(size: 11.5, design: .monospaced))
         .padding(.vertical, 1)
         .background(bg)
         .textSelection(.enabled)
     }
+}
 
-    // MARK: plan card
+// MARK: - Plan (inline checklist; rail treatment is a follow-up)
 
-    @ViewBuilder
-    private func planCard(items: [PlanItem]) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Text("PLAN")
-                .font(.system(size: 11, weight: .semibold)).tracking(0.5)
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 11).padding(.vertical, 8)
-                .background(Color.secondary.opacity(0.03))
-            Divider()
-            VStack(alignment: .leading, spacing: 0) {
-                ForEach(Array(items.enumerated()), id: \.offset) { _, item in
-                    planRow(item)
-                }
+private struct PlanSection: View {
+    let items: [PlanItem]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Plan")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.tertiary)
+                .padding(.leading, 2)
+            ForEach(Array(items.enumerated()), id: \.offset) { _, item in
+                PlanRow(item: item)
             }
-            .padding(.horizontal, 11).padding(.vertical, 7)
         }
-        .background(RoundedRectangle(cornerRadius: 10).fill(Color.secondary.opacity(0.02)))
+        .padding(10)
+        .background(Color.secondary.opacity(0.03), in: RoundedRectangle(cornerRadius: 10))
         .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(.quaternary))
     }
+}
 
-    private func planRow(_ item: PlanItem) -> some View {
+private struct PlanRow: View {
+    let item: PlanItem
+
+    var body: some View {
         let status = item.status.lowercased()
         let done = status == "completed" || status == "done"
         let active = status == "in_progress" || status == "active"
@@ -333,12 +452,12 @@ private struct BlockView: View {
                     Image(systemName: "checkmark")
                         .font(.system(size: 9, weight: .bold))
                         .foregroundStyle(.white)
-                        .frame(width: 14, height: 14)
+                        .frame(width: 15, height: 15)
                         .background(green, in: RoundedRectangle(cornerRadius: 4))
                 } else {
                     RoundedRectangle(cornerRadius: 4)
-                        .strokeBorder(active ? AgentStyle.identityColor(agentName) : Color.secondary.opacity(0.3), lineWidth: 1.5)
-                        .frame(width: 14, height: 14)
+                        .strokeBorder(active ? AgentStyle.identityColor("claude") : Color.secondary.opacity(0.3), lineWidth: 1.5)
+                        .frame(width: 15, height: 15)
                 }
             }
             Text(item.text)
@@ -347,6 +466,6 @@ private struct BlockView: View {
                 .strikethrough(done, color: Color.secondary.opacity(0.5))
             Spacer(minLength: 0)
         }
-        .padding(.vertical, 3)
+        .padding(.vertical, 2)
     }
 }

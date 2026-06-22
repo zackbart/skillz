@@ -51,6 +51,20 @@ enum AgentStyle {
         }
     }
 
+    /// SF Symbol for a work-log row, by tool name (T3-style one-liner icon).
+    static func toolSymbol(_ name: String) -> String {
+        switch name.lowercased() {
+        case "read": return "eye"
+        case "edit", "multiedit", "write": return "square.and.pencil"
+        case "bash": return "terminal"
+        case "skill": return "puzzlepiece.extension"
+        case "agent", "task": return "sparkles"
+        case "webfetch", "websearch", "web_search": return "globe"
+        case "todowrite": return "checklist"
+        default: return "wrench.and.screwdriver"
+        }
+    }
+
     /// Collapse a full `cwd` path to a tasteful `~/Dev/…/leaf` form (mono, truncatable).
     static func shortCwd(_ path: String) -> String {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
