@@ -1,7 +1,7 @@
 import SwiftUI
 
 @main
-struct HerdrApp: App {
+struct LoadoutApp: App {
     @State private var app = AppModel()
 
     var body: some Scene {

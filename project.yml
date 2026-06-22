@@ -1,9 +1,18 @@
+# XcodeGen project definition — the maintained source of truth. Generate with:
+#
+#     brew install xcodegen
+#     xcodegen generate && open Loadout.xcodeproj
+#
+# This is a monorepo with two apps that share the local HerdrKit package:
+#   - Loadout      (macOS)  — sources in apps/macOS/Sources
+#   - LoadoutiOS   (iOS)     — sources in apps/iOS/Sources, displayed as "Loadout"
 name: Loadout
 options:
   bundleIdPrefix: dev.zackbart
+  createIntermediateGroups: true
   deploymentTarget:
     macOS: "26.0"
-  createIntermediateGroups: true
+    iOS: "17.0"
 packages:
   Yams:
     url: https://github.com/jpsim/Yams
@@ -12,12 +21,26 @@ packages:
     path: Packages/HerdrKit
   LoadoutAgentKit:
     path: Packages/LoadoutAgentKit
+  # iOS-only SSH stack — powers apps/iOS/Sources/Connection/SSHTransport.swift.
+  Citadel:
+    url: https://github.com/orlandos-nl/Citadel.git
+    from: "0.7.0"
+  swift-nio:
+    url: https://github.com/apple/swift-nio.git
+    from: "2.0.0"
+  # Same fork + range Citadel pins; used by the TOFU host-key validator.
+  swift-nio-ssh:
+    url: https://github.com/Wellz26/swift-nio-ssh.git
+    from: "0.3.4"
+  swift-crypto:
+    url: https://github.com/apple/swift-crypto.git
+    from: "3.0.0"
 targets:
   Loadout:
     type: application
     platform: macOS
     sources:
-      - path: Sources
+      - path: apps/macOS/Sources
     dependencies:
       - package: Yams
       - package: HerdrKit
@@ -45,7 +68,7 @@ targets:
     type: bundle.unit-test
     platform: macOS
     sources:
-      - path: Tests
+      - path: apps/macOS/Tests
     dependencies:
       - target: Loadout
     settings:
@@ -53,3 +76,41 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: dev.zackbart.loadoutTests
         SWIFT_VERSION: "5.0"
         GENERATE_INFOPLIST_FILE: YES
+  LoadoutiOS:
+    type: application
+    platform: iOS
+    sources:
+      - path: apps/iOS/Sources
+    dependencies:
+      - package: HerdrKit
+        product: HerdrKit
+      - package: Citadel
+        product: Citadel
+      - package: swift-nio
+        product: NIOCore
+      - package: swift-nio-ssh
+        product: NIOSSH
+      - package: swift-crypto
+        product: Crypto
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.zackbart.loadout.ios
+        PRODUCT_NAME: Loadout
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        SWIFT_VERSION: "5.9"
+        TARGETED_DEVICE_FAMILY: "1,2"
+        DEVELOPMENT_TEAM: F2J8ZU2NQJ
+        CODE_SIGN_STYLE: Automatic
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: Loadout
+        # iOS gates LAN connections (private IPs / .local) behind Local Network
+        # Privacy — required so SSHing into a Herdr box on your network works.
+        INFOPLIST_KEY_NSLocalNetworkUsageDescription: "Loadout connects over SSH to machines on your local network to control their terminal sessions."
+        # Standard SSH crypto only → exempt; declared so uploads skip the prompt.
+        INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: NO
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: "UIInterfaceOrientationPortrait"
+        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
